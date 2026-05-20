@@ -35,7 +35,8 @@ async def create_service(data: ServiceCreate, session: AsyncSession = Depends(ge
         )
         return service
     except ServiceManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)
 
 
 @router.get("/{name}", response_model=ServiceResponse)
@@ -62,7 +63,8 @@ async def start_service(name: str, session: AsyncSession = Depends(get_session))
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=500, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=500, detail=detail_msg)
 
 
 @router.post("/{name}/stop", response_model=ServiceResponse)
@@ -72,7 +74,8 @@ async def stop_service(name: str, session: AsyncSession = Depends(get_session)):
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=500, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=500, detail=detail_msg)
 
 
 @router.post("/{name}/restart", response_model=ServiceResponse)
@@ -82,7 +85,8 @@ async def restart_service(name: str, session: AsyncSession = Depends(get_session
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=500, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=500, detail=detail_msg)
 
 
 @router.post("/{name}/enable", response_model=ServiceResponse)
@@ -92,7 +96,8 @@ async def enable_service(name: str, session: AsyncSession = Depends(get_session)
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=500, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=500, detail=detail_msg)
 
 
 @router.post("/{name}/disable", response_model=ServiceResponse)
@@ -102,7 +107,8 @@ async def disable_service(name: str, session: AsyncSession = Depends(get_session
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=500, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=500, detail=detail_msg)
 
 
 @router.get("/{name}/status", response_model=ServiceStatus)
@@ -143,7 +149,8 @@ async def update_service_code(name: str, data: CodeUpdate, session: AsyncSession
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)
 
 
 @router.post("/{name}/upload")
@@ -158,4 +165,5 @@ async def upload_service_script(name: str, file: UploadFile = File(...), session
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)

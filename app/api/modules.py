@@ -48,7 +48,8 @@ async def create_module(data: ModuleCreate, session: AsyncSession = Depends(get_
         resp.service_count = 0
         return resp
     except ModuleManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)
 
 
 # ── Validation (must be before /{name} routes) ────────────────
@@ -117,7 +118,8 @@ async def update_module(name: str, data: ModuleUpdate, session: AsyncSession = D
     except ModuleNotFoundError:
         raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
     except ModuleManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)
 
 
 @router.delete("/{name}", status_code=204)
@@ -154,7 +156,8 @@ async def update_module_code(name: str, data: ModuleCodeUpdate, session: AsyncSe
     except ModuleNotFoundError:
         raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
     except ModuleManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)
 
 
 @router.post("/{name}/upload")
@@ -175,7 +178,8 @@ async def upload_module_file(name: str, file: UploadFile = File(...), session: A
     except ModuleNotFoundError:
         raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
     except ModuleManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)
 
 
 # ── Module-Service Relationship ────────────────────────────────

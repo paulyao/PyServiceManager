@@ -30,4 +30,5 @@ async def update_service_config(name: str, data: ConfigUpdate, session: AsyncSes
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
+        detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+        raise HTTPException(status_code=400, detail=detail_msg)

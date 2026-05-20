@@ -15,7 +15,11 @@ async function request(method, path, body = null) {
     const res = await fetch(`${API_BASE}${path}`, opts);
     if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || err.error || JSON.stringify(err));
+        let errorMsg = err.detail;
+        if (typeof errorMsg === 'object') {
+            errorMsg = errorMsg.error || errorMsg.detail || JSON.stringify(errorMsg);
+        }
+        throw new Error(errorMsg || err.error || res.statusText);
     }
     if (res.status === 204) return null;
     return res.json();
