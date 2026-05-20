@@ -35,7 +35,8 @@ MODULES_REGISTRY = SERVICE_DIR / ".modules.json"
 # ── Logging ────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format=f"%(asctime)s [{SERVICE_NAME}] %(levelname)s %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
     ],
