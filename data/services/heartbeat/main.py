@@ -159,11 +159,11 @@ def run(config, modules):
         #     logger.info(f"认证请求失败: {result['error']}")
 
         # --- 错误处理示例 ---
-        # result = http.get("https://invalid.example.com/not-found", timeout=5)
-        # if not result["success"]:
-        #     logger.info(f"请求错误 - 状态码: {result['status_code']}, 错误: {result['error']}")
+        result = http.get("http://127.0.0.1:8900", timeout=5)
+        if not result["success"]:
+            logger.info(f"请求错误 - 状态码: {result['status_code']}, 错误: {result['error']}")
 
-        logger.info("http-client 模块已加载（示例代码已注释，取消注释即可运行）")
+        logger.info(f"状态码: {result['status_code']}")
     else:
         logger.info("http-client 模块未启用")
 
