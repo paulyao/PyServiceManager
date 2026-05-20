@@ -428,7 +428,9 @@ async function saveModuleSettings(name) {
         showToast(name !== newName ? `模块已重命名: ${name} → ${newName}` : '模块设置已保存');
         renderModulesPage();
     } catch (e) { showToast(e.message, 'error'); }
-} {
+}
+
+async function viewModuleServices(name) {
     try {
         const data = await api.getModuleServices(name);
         const services = data.services || [];
