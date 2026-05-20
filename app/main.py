@@ -1,0 +1,101 @@
+"""PyService Manager - FastAPI application entry point."""
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+from app.config import API_PREFIX, HOST, PORT, DATA_DIR, SERVICES_DIR, MODULES_DIR
+from app.database import init_db
+from app.core.service_manager import ServiceManager
+from app.core.config_watcher import ConfigWatcher
+
+
+# Global instances
+service_manager = ServiceManager()
+config_watcher = ConfigWatcher()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: startup and shutdown."""
+    # Startup
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    MODULES_DIR.mkdir(parents=True, exist_ok=True)
+
+    await init_db()
+    await config_watcher.start()
+
+    # Sync all service statuses
+    from app.database import async_session
+    async with async_session() as session:
+        await service_manager.sync_all_status(session)
+
+    yield
+
+    # Shutdown
+    await config_watcher.stop()
+
+
+app = FastAPI(
+    title="PyService Manager",
+    description="Python Service Management Platform with Module System",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# Global exception handler
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR", "message": str(exc)}},
+    )
+
+# Import and register routers
+from app.api.services import router as services_router
+from app.api.config import router as config_router
+from app.api.logs import router as logs_router
+from app.api.modules import router as modules_router
+
+app.include_router(services_router, prefix=API_PREFIX)
+app.include_router(config_router, prefix=API_PREFIX)
+app.include_router(logs_router, prefix=API_PREFIX)
+app.include_router(modules_router, prefix=API_PREFIX)
+
+
+# Serve static files
+static_dir = Path(__file__).parent.parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/")
+async def index():
+    """Serve the main page."""
+    from fastapi.responses import FileResponse
+    index_path = static_dir / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
+    return {"message": "PyService Manager is running. Static files not found."}
+
+
+@app.get(f"{API_PREFIX}/health")
+async def health():
+    return {"status": "ok", "backend": service_manager.backend_name}
+
+
+def cli():
+    """CLI entry point."""
+    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=True)
+
+
+if __name__ == "__main__":
+    cli()

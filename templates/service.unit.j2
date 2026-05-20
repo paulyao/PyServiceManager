@@ -1,0 +1,15 @@
+[Unit]
+Description={{ display_name }}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{ python_path }} {{ runner_path }}
+WorkingDirectory={{ working_dir }}
+{% if auto_restart %}Restart=on-failure
+RestartSec=5{% else %}Restart=no{% endif %}
+StandardOutput=append:{{ log_path }}
+StandardError=append:{{ log_path }}
+
+[Install]
+WantedBy=multi-user.target
