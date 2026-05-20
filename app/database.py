@@ -25,6 +25,14 @@ async def init_db():
             await conn.execute(text(
                 "ALTER TABLE modules ADD COLUMN is_builtin BOOLEAN NOT NULL DEFAULT 0"
             ))
+        if "builtin_source" not in columns:
+            await conn.execute(text(
+                "ALTER TABLE modules ADD COLUMN builtin_source VARCHAR(64) DEFAULT NULL"
+            ))
+        # Set builtin_source for existing built-in modules
+        await conn.execute(text(
+            "UPDATE modules SET builtin_source = name WHERE is_builtin = 1 AND builtin_source IS NULL"
+        ))
 
 
 async def get_session() -> AsyncSession:

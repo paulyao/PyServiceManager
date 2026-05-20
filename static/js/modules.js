@@ -45,6 +45,7 @@ function renderModuleCard(m) {
             </div>
             <div style="margin-top:12px;display:flex;gap:8px">
                 <button class="btn btn-outline btn-sm" onclick="openEditModuleModal('${m.name}')">编辑代码</button>
+                <button class="btn btn-outline btn-sm" onclick="openModuleSettingsModal('${m.name}')">设置</button>
                 <button class="btn btn-outline btn-sm" onclick="viewModuleServices('${m.name}')">关联服务</button>
                 ${deleteBtn}
             </div>
@@ -366,7 +367,68 @@ async function deleteModule(name) {
     } catch (e) { showToast(e.message, 'error'); }
 }
 
-async function viewModuleServices(name) {
+// ── 模块设置弹窗 ───────────────────────────────────────
+async function openModuleSettingsModal(name) {
+    try {
+        const m = await api.getModule(name);
+        const overlay = document.getElementById('modal-overlay');
+        overlay.innerHTML = `
+            <div class="modal" style="max-width:480px">
+                <div class="modal-header">
+                    <span class="modal-title">模块设置: ${escapeHtml(m.display_name)}</span>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">模块名称</label>
+                    <input class="form-input" id="mod-set-name" value="${escapeHtml(m.name)}" pattern="[a-zA-Z][a-zA-Z0-9_-]{0,63}">
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">修改后将重命名目录并更新所有关联路径</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">显示名称</label>
+                    <input class="form-input" id="mod-set-display" value="${escapeHtml(m.display_name)}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">描述</label>
+                    <textarea class="form-textarea" id="mod-set-desc" rows="3">${escapeHtml(m.description || '')}</textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">版本</label>
+                    <input class="form-input" id="mod-set-version" value="${escapeHtml(m.version)}">
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="closeModal()">取消</button>
+                    <button class="btn btn-primary" onclick="saveModuleSettings('${m.name}')">保存</button>
+                </div>
+            </div>
+        `;
+        overlay.classList.add('open');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function saveModuleSettings(name) {
+    const newName = document.getElementById('mod-set-name').value.trim();
+    const displayName = document.getElementById('mod-set-display').value.trim();
+    const description = document.getElementById('mod-set-desc').value.trim();
+    const version = document.getElementById('mod-set-version').value.trim();
+
+    if (!newName) { showToast('模块名称不能为空', 'error'); return; }
+    if (!displayName) { showToast('显示名称不能为空', 'error'); return; }
+
+    const data = {};
+    if (newName !== name) data.name = newName;
+    if (displayName) data.display_name = displayName;
+    data.description = description || null;
+    if (version) data.version = version;
+
+    try {
+        await api.updateModule(name, data);
+        closeModal();
+        showToast(name !== newName ? `模块已重命名: ${name} → ${newName}` : '模块设置已保存');
+        renderModulesPage();
+    } catch (e) { showToast(e.message, 'error'); }
+} {
     try {
         const data = await api.getModuleServices(name);
         const services = data.services || [];

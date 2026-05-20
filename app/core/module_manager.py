@@ -50,9 +50,14 @@ class ModuleManager:
 
             name = module_dir.name
 
-            # Check if already registered
-            existing = await session.execute(select(Module).where(Module.name == name))
-            if existing.scalar_one_or_none():
+            # Check if already registered (by name or by builtin_source for renamed modules)
+            existing_by_name = await session.execute(select(Module).where(Module.name == name))
+            if existing_by_name.scalar_one_or_none():
+                continue
+            existing_by_source = await session.execute(
+                select(Module).where(Module.builtin_source == name, Module.is_builtin == True)  # noqa: E712
+            )
+            if existing_by_source.scalar_one_or_none():
                 continue
 
             # Read code and optional config
@@ -89,6 +94,7 @@ class ModuleManager:
                 script_path=str(target_script),
                 config_path=str(target_config) if target_config else None,
                 is_builtin=True,
+                builtin_source=name,
             )
             session.add(module)
             created.append(name)
@@ -164,13 +170,58 @@ class ModuleManager:
         self,
         session: AsyncSession,
         name: str,
+        new_name: str | None = None,
         display_name: str | None = None,
         description: str | None = None,
         version: str | None = None,
         author: str | None = None,
     ) -> Module:
-        """Update module metadata."""
+        """Update module metadata. Supports renaming via new_name."""
         module = await self._get_module(session, name)
+
+        # Handle rename
+        if new_name is not None and new_name != name:
+            validate_service_name(new_name)
+
+            # Check uniqueness of new name
+            existing = await session.execute(select(Module).where(Module.name == new_name))
+            if existing.scalar_one_or_none():
+                raise ModuleManagerError(f"Module '{new_name}' already exists")
+
+            old_dir = MODULES_DIR / name
+            new_dir = MODULES_DIR / new_name
+
+            # Rename directory on disk
+            if old_dir.exists():
+                old_dir.rename(new_dir)
+
+            # Update script_path and config_path
+            old_script = Path(module.script_path)
+            new_script = new_dir / old_script.name
+            module.script_path = str(new_script)
+
+            if module.config_path:
+                old_config = Path(module.config_path)
+                new_config = new_dir / old_config.name
+                module.config_path = str(new_config)
+
+            # For built-in modules, set builtin_source if not already set
+            if module.is_builtin and not module.builtin_source:
+                module.builtin_source = name
+
+            module.name = new_name
+
+            # Update .modules.json for all bound services
+            bindings = await session.execute(
+                select(ServiceModule).where(ServiceModule.module_id == module.id)
+            )
+            bound_services = bindings.scalars().all()
+            for sm in bound_services:
+                svc_result = await session.execute(select(Service).where(Service.id == sm.service_id))
+                svc = svc_result.scalar_one_or_none()
+                if svc:
+                    await self._write_modules_registry(session, svc)
+
         if display_name is not None:
             module.display_name = display_name
         if description is not None:

@@ -16,6 +16,7 @@ class ModuleCreate(BaseModel):
 
 
 class ModuleUpdate(BaseModel):
+    name: str | None = Field(None, pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$", description="New module name (renames directory and updates paths)")
     display_name: str | None = None
     description: str | None = None
     version: str | None = None

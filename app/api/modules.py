@@ -105,6 +105,7 @@ async def update_module(name: str, data: ModuleUpdate, session: AsyncSession = D
         module = await module_manager.update(
             session=session,
             name=name,
+            new_name=data.name,
             display_name=data.display_name,
             description=data.description,
             version=data.version,
@@ -115,6 +116,8 @@ async def update_module(name: str, data: ModuleUpdate, session: AsyncSession = D
         return resp
     except ModuleNotFoundError:
         raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
+    except ModuleManagerError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e), "detail": e.detail})
 
 
 @router.delete("/{name}", status_code=204)

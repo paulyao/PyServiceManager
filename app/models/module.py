@@ -19,5 +19,6 @@ class Module(Base):
     script_path: Mapped[str] = mapped_column(Text, nullable=False)
     config_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    builtin_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
