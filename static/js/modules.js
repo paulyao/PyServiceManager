@@ -226,7 +226,12 @@ async function createModule() {
         if (codeSource === 'upload') {
             const fileInput = document.getElementById('mod-upload');
             if (fileInput.files[0]) {
+                if (!fileInput.files[0].name.endsWith('.py')) {
+                    showToast('只能上传 .py 文件', 'error'); return;
+                }
                 await api.uploadModuleFile(name, fileInput.files[0]);
+            } else {
+                showToast('请选择要上传的文件', 'error'); return;
             }
         }
 
@@ -287,6 +292,11 @@ async function openEditModuleModal(name) {
 
 async function loadModuleFileToEditor(input) {
     if (input.files[0]) {
+        if (!input.files[0].name.endsWith('.py')) {
+            showToast('只能上传 .py 文件', 'error');
+            input.value = '';
+            return;
+        }
         const reader = new FileReader();
         reader.onload = async (e) => {
             const CM = await window.CMReady;

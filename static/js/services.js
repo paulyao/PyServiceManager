@@ -226,7 +226,12 @@ async function createService() {
         if (codeSource === 'upload') {
             const fileInput = document.getElementById('svc-upload');
             if (fileInput.files[0]) {
+                if (!fileInput.files[0].name.endsWith('.py')) {
+                    showToast('只能上传 .py 文件', 'error'); return;
+                }
                 await api.uploadServiceScript(name, fileInput.files[0]);
+            } else {
+                showToast('请选择要上传的文件', 'error'); return;
             }
         }
 
@@ -440,6 +445,11 @@ async function saveServiceCode(name) {
 
 async function uploadServiceCode(name, input) {
     if (input.files[0]) {
+        if (!input.files[0].name.endsWith('.py')) {
+            showToast('只能上传 .py 文件', 'error');
+            input.value = '';
+            return;
+        }
         try {
             const result = await api.uploadServiceScript(name, input.files[0]);
             showToast(result.message);
