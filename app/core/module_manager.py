@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import MODULES_DIR, SERVICES_DIR
+from app.config import MODULES_DIR, SERVICES_DIR, BUILTIN_MODULES_DIR
 from app.models.module import Module
 from app.models.service import Service
 from app.models.service_module import ServiceModule
@@ -25,8 +25,78 @@ class ModuleNotFoundError(ModuleManagerError):
     pass
 
 
+class BuiltinModuleError(ModuleManagerError):
+    """Raised when trying to delete a built-in module."""
+    pass
+
+
 class ModuleManager:
     """Manages module CRUD, file operations, and service bindings."""
+
+    async def ensure_builtin_modules(self, session: AsyncSession) -> list[str]:
+        """Ensure all built-in modules from builtin_modules/ are registered.
+        Returns list of newly created module names."""
+        if not BUILTIN_MODULES_DIR.exists():
+            return []
+
+        created = []
+        for module_dir in sorted(BUILTIN_MODULES_DIR.iterdir()):
+            if not module_dir.is_dir():
+                continue
+
+            script_file = module_dir / "module.py"
+            if not script_file.exists():
+                continue
+
+            name = module_dir.name
+
+            # Check if already registered
+            existing = await session.execute(select(Module).where(Module.name == name))
+            if existing.scalar_one_or_none():
+                continue
+
+            # Read code and optional config
+            code = script_file.read_text(encoding="utf-8")
+            config_file = module_dir / "config.toml"
+            config_toml = config_file.read_text(encoding="utf-8") if config_file.exists() else None
+
+            # Validate
+            valid, errors, module_info = validate_module_code(code)
+            if not valid:
+                continue
+
+            # Create module directory in data/
+            target_dir = MODULES_DIR / name
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy script
+            target_script = target_dir / "module.py"
+            target_script.write_text(code, encoding="utf-8")
+
+            # Copy config if present
+            target_config = None
+            if config_toml:
+                target_config = target_dir / "config.toml"
+                target_config.write_text(config_toml, encoding="utf-8")
+
+            # Create DB record with is_builtin=True
+            module = Module(
+                name=name,
+                display_name=module_info.get("description", name) if module_info else name,
+                description=module_info.get("description") if module_info else None,
+                version=module_info.get("version", "1.0.0") if module_info else "1.0.0",
+                code_source="builtin",
+                script_path=str(target_script),
+                config_path=str(target_config) if target_config else None,
+                is_builtin=True,
+            )
+            session.add(module)
+            created.append(name)
+
+        if created:
+            await session.commit()
+
+        return created
 
     async def create(
         self,
@@ -115,8 +185,11 @@ class ModuleManager:
         return module
 
     async def delete(self, session: AsyncSession, name: str) -> None:
-        """Delete a module and its files."""
+        """Delete a module and its files. Built-in modules cannot be deleted."""
         module = await self._get_module(session, name)
+
+        if module.is_builtin:
+            raise BuiltinModuleError(f"Built-in module '{name}' cannot be deleted")
 
         # Remove module directory
         module_dir = MODULES_DIR / name

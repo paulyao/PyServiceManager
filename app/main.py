@@ -27,6 +27,17 @@ async def lifespan(app: FastAPI):
     MODULES_DIR.mkdir(parents=True, exist_ok=True)
 
     await init_db()
+
+    # Ensure built-in modules are registered
+    from app.core.module_manager import ModuleManager
+    from app.database import async_session
+    async with async_session() as session:
+        module_manager = ModuleManager()
+        created = await module_manager.ensure_builtin_modules(session)
+        if created:
+            import logging
+            logging.getLogger("app.main").info(f"Registered built-in modules: {created}")
+
     await config_watcher.start()
 
     # Sync all service statuses

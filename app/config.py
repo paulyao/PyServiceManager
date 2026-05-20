@@ -6,6 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 SERVICES_DIR = DATA_DIR / "services"
 MODULES_DIR = DATA_DIR / "modules"
+BUILTIN_MODULES_DIR = BASE_DIR / "builtin_modules"
 DB_PATH = DATA_DIR / "platform.db"
 TEMPLATES_DIR = BASE_DIR / "templates"
 

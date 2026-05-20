@@ -159,6 +159,7 @@ body {
 .badge-stopped { background: rgba(231,76,60,0.15); color: var(--danger); }
 .badge-failed { background: rgba(253,203,110,0.15); color: var(--warning); }
 .badge-unknown { background: rgba(139,143,163,0.15); color: var(--text-secondary); }
+.badge-info { background: rgba(116,185,255,0.15); color: var(--info); }
 
 /* Service Card */
 .service-card-header {

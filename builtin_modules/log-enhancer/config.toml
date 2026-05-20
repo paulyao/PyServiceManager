@@ -1,0 +1,9 @@
+# Log Enhancer module configuration
+
+[retention]
+# Log retention period in days. Entries older than this will be removed.
+days = 7
+
+# How often (in seconds) to check for expired log entries.
+# Default: 3600 (1 hour)
+check_interval = 3600

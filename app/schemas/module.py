@@ -35,6 +35,7 @@ class ModuleResponse(BaseModel):
     version: str
     author: str | None
     code_source: str
+    is_builtin: bool = False
     service_count: int = 0
     created_at: datetime
     updated_at: datetime

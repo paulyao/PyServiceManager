@@ -1,0 +1,10 @@
+# MySQL Helper module configuration
+# This module is stateless - connection parameters are provided by the caller.
+# This config file serves as documentation and default reference only.
+
+[defaults]
+# Default connection parameters (used as reference, not auto-applied)
+host = "127.0.0.1"
+port = 3306
+charset = "utf8mb4"
+connect_timeout = 10

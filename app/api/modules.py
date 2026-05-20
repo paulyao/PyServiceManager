@@ -11,7 +11,7 @@ from app.schemas.module import (
     ModuleValidateRequest, ModuleValidateResponse,
     ServiceModulesUpdate, ServiceModulesResponse, ServiceModuleItem,
 )
-from app.core.module_manager import ModuleManager, ModuleNotFoundError, ModuleManagerError
+from app.core.module_manager import ModuleManager, ModuleNotFoundError, ModuleManagerError, BuiltinModuleError
 from app.core.module_loader import validate_module_code
 
 router = APIRouter(prefix="/modules", tags=["modules"])
@@ -123,6 +123,8 @@ async def delete_module(name: str, session: AsyncSession = Depends(get_session))
         await module_manager.delete(session, name)
     except ModuleNotFoundError:
         raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
+    except BuiltinModuleError as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 # ── Code Management ────────────────────────────────────────────

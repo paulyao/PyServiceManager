@@ -29,21 +29,24 @@ async function renderModulesPage() {
 }
 
 function renderModuleCard(m) {
+    const builtinBadge = m.is_builtin ? '<span class="badge badge-info">内置</span>' : '';
+    const deleteBtn = m.is_builtin ? '' : `<button class="btn btn-outline btn-sm btn-icon" onclick="deleteModule('${m.name}')" title="删除">🗑️</button>`;
     return `
         <div class="card" data-module="${m.name}">
             <div class="module-card-header">
                 <span class="module-name">${escapeHtml(m.display_name)}</span>
                 <span class="module-version">v${escapeHtml(m.version)}</span>
+                ${builtinBadge}
             </div>
             <div class="module-desc">${escapeHtml(m.description || '暂无描述')}</div>
             <div class="module-meta">
                 <span>🔗 ${m.service_count} 个服务</span>
-                <span>${m.code_source === 'editor' ? '在线编辑' : m.code_source === 'upload' ? '上传文件' : m.code_source}</span>
+                <span>${m.is_builtin ? '内置模块' : m.code_source === 'editor' ? '在线编辑' : m.code_source === 'upload' ? '上传文件' : m.code_source}</span>
             </div>
             <div style="margin-top:12px;display:flex;gap:8px">
                 <button class="btn btn-outline btn-sm" onclick="openEditModuleModal('${m.name}')">编辑代码</button>
                 <button class="btn btn-outline btn-sm" onclick="viewModuleServices('${m.name}')">关联服务</button>
-                <button class="btn btn-outline btn-sm btn-icon" onclick="deleteModule('${m.name}')" title="删除">🗑️</button>
+                ${deleteBtn}
             </div>
         </div>
     `;
