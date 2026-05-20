@@ -169,10 +169,11 @@ class ProcessBackend(ServiceBackend):
 
         log_file = open(self._log_path(service), "a")
         proc = subprocess.Popen(
-            [service.python_path, str(self._runner_path(service))],
+            [service.python_path, "-u", str(self._runner_path(service))],
             stdout=log_file,
             stderr=log_file,
             cwd=service.working_dir,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
         # Write PID file
         self._pid_path(service).write_text(str(proc.pid))

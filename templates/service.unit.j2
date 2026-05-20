@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={{ python_path }} {{ runner_path }}
+ExecStart={{ python_path }} -u {{ runner_path }}
+Environment=PYTHONUNBUFFERED=1
 WorkingDirectory={{ working_dir }}
 {% if auto_restart %}Restart=on-failure
 RestartSec=5{% else %}Restart=no{% endif %}
