@@ -50,7 +50,7 @@ function renderModuleCard(m) {
 }
 
 // ── 创建模块弹窗 ──────────────────────────────────────
-function openCreateModuleModal() {
+async function openCreateModuleModal() {
     const overlay = document.getElementById('modal-overlay');
     overlay.innerHTML = `
         <div class="modal">
@@ -84,7 +84,7 @@ function openCreateModuleModal() {
             <div id="mod-editor-section">
                 <div class="form-group">
                     <label class="form-label">模块代码</label>
-                    <textarea class="form-textarea" id="mod-code" rows="18" style="font-family:monospace;font-size:13px">${escapeHtml(getDefaultModuleCode())}</textarea>
+                    <div id="mod-code" class="cm-editor-container"></div>
                 </div>
                 <div id="mod-validation-result"></div>
             </div>
@@ -96,7 +96,7 @@ function openCreateModuleModal() {
             </div>
             <div class="form-group">
                 <label class="form-label">模块配置 (TOML，可选)</label>
-                <textarea class="form-textarea" id="mod-config" rows="5" style="font-family:monospace;font-size:13px" placeholder="[settings]\nkey = \"value\""></textarea>
+                <div id="mod-config" class="cm-editor-container"></div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeModal()">取消</button>
@@ -106,6 +106,10 @@ function openCreateModuleModal() {
         </div>
     `;
     overlay.classList.add('open');
+
+    const CM = await window.CMReady;
+    CM.createPythonEditor('mod-code', { initialValue: getDefaultModuleCode(), height: '396px' });
+    CM.createTomlEditor('mod-config', { height: '110px' });
 
     document.querySelectorAll('input[name="mod-code-source"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
@@ -146,7 +150,8 @@ class Module:
 }
 
 async function validateModuleCode() {
-    const code = document.getElementById('mod-code')?.value;
+    const CM = await window.CMReady;
+    const code = CM.getEditorValue('mod-code');
     if (!code) return;
 
     try {
@@ -200,10 +205,12 @@ async function createModule() {
     let code = null;
 
     if (codeSource === 'editor') {
-        code = document.getElementById('mod-code').value;
+        const CM = await window.CMReady;
+        code = CM.getEditorValue('mod-code');
     }
 
-    const configToml = document.getElementById('mod-config').value.trim() || null;
+    const CM = await window.CMReady;
+    const configToml = CM.getEditorValue('mod-config').trim() || null;
 
     try {
         await api.createModule({
@@ -246,13 +253,13 @@ async function openEditModuleModal(name) {
                     <div style="flex:1">
                         <div class="form-group">
                             <label class="form-label">module.py</label>
-                            <textarea id="edit-mod-code" class="form-textarea" rows="20" style="font-family:monospace;font-size:13px">${escapeHtml(data.code)}</textarea>
+                            <div id="edit-mod-code" class="cm-editor-container"></div>
                         </div>
                     </div>
                     <div style="width:280px">
                         <div class="form-group">
                             <label class="form-label">config.toml</label>
-                            <textarea id="edit-mod-config" class="form-textarea" rows="8" style="font-family:monospace;font-size:13px">${escapeHtml(data.config_toml || '')}</textarea>
+                            <div id="edit-mod-config" class="cm-editor-container"></div>
                         </div>
                         <div id="edit-mod-validation"></div>
                         <div class="form-group" style="margin-top:12px">
@@ -269,24 +276,29 @@ async function openEditModuleModal(name) {
             </div>
         `;
         overlay.classList.add('open');
+
+        const CM = await window.CMReady;
+        CM.createPythonEditor('edit-mod-code', { initialValue: data.code, height: '440px' });
+        CM.createTomlEditor('edit-mod-config', { initialValue: data.config_toml || '', height: '176px' });
     } catch (e) {
         showToast(e.message, 'error');
     }
 }
 
-function loadModuleFileToEditor(input) {
+async function loadModuleFileToEditor(input) {
     if (input.files[0]) {
         const reader = new FileReader();
-        reader.onload = (e) => {
-            const editor = document.getElementById('edit-mod-code');
-            if (editor) editor.value = e.target.result;
+        reader.onload = async (e) => {
+            const CM = await window.CMReady;
+            CM.setEditorValue('edit-mod-code', e.target.result);
         };
         reader.readAsText(input.files[0]);
     }
 }
 
 async function validateEditModuleCode() {
-    const code = document.getElementById('edit-mod-code')?.value;
+    const CM = await window.CMReady;
+    const code = CM.getEditorValue('edit-mod-code');
     if (!code) return;
 
     try {
@@ -319,8 +331,9 @@ async function validateEditModuleCode() {
 }
 
 async function saveModuleCode(name) {
-    const code = document.getElementById('edit-mod-code').value;
-    const configToml = document.getElementById('edit-mod-config').value.trim() || null;
+    const CM = await window.CMReady;
+    const code = CM.getEditorValue('edit-mod-code');
+    const configToml = CM.getEditorValue('edit-mod-config').trim() || null;
 
     try {
         const result = await api.updateModuleCode(name, code, configToml);

@@ -354,6 +354,26 @@ body {
     border-bottom: 1px solid var(--border);
 }
 
+/* CodeMirror editor container */
+.cm-editor-container .cm-editor {
+    font-size: 13px;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    border-radius: var(--radius);
+}
+
+.cm-editor-container .cm-editor .cm-scroller {
+    font-family: inherit;
+}
+
+.cm-editor-container .cm-editor.cm-focused {
+    outline: none;
+}
+
+.editor-wrapper .cm-editor-container .cm-editor {
+    border: none;
+    border-radius: 0;
+}
+
 /* Module list in service detail */
 .module-list-item {
     display: flex;

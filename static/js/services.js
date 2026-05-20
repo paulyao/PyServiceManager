@@ -118,7 +118,7 @@ async function deleteService(name) {
 }
 
 // ── 创建服务弹窗 ─────────────────────────────────────
-function openCreateServiceModal() {
+async function openCreateServiceModal() {
     const overlay = document.getElementById('modal-overlay');
     overlay.innerHTML = `
         <div class="modal">
@@ -149,7 +149,7 @@ function openCreateServiceModal() {
                 <div class="form-group">
                     <label class="form-label">Python 代码</label>
                     <div class="editor-wrapper">
-                        <textarea class="form-textarea" id="svc-code" rows="15" style="font-family:monospace;font-size:13px">${escapeHtml(getDefaultServiceCode())}</textarea>
+                        <div id="svc-code" class="cm-editor-container"></div>
                     </div>
                 </div>
             </div>
@@ -166,6 +166,9 @@ function openCreateServiceModal() {
         </div>
     `;
     overlay.classList.add('open');
+
+    const CM = await window.CMReady;
+    CM.createPythonEditor('svc-code', { initialValue: getDefaultServiceCode(), height: '330px' });
 
     document.querySelectorAll('input[name="code-source"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
@@ -206,7 +209,8 @@ async function createService() {
     let code = null;
 
     if (codeSource === 'editor') {
-        code = document.getElementById('svc-code').value;
+        const CM = await window.CMReady;
+        code = CM.getEditorValue('svc-code');
     }
 
     try {
@@ -303,7 +307,7 @@ async function renderServiceDetailPage(params) {
                             </label>
                         </div>
                     </div>
-                    <textarea id="service-code-editor" class="form-textarea" rows="20" style="font-family:monospace;font-size:13px;border:none;border-radius:0"></textarea>
+                    <div id="service-code-editor" class="cm-editor-container"></div>
                 </div>
             </div>
 
@@ -313,7 +317,7 @@ async function renderServiceDetailPage(params) {
                         <span>config.toml</span>
                         <button class="btn btn-primary btn-sm" onclick="saveServiceConfig('${name}')">保存并热加载</button>
                     </div>
-                    <textarea id="service-config-editor" class="form-textarea" rows="15" style="font-family:monospace;font-size:13px;border:none;border-radius:0"></textarea>
+                    <div id="service-config-editor" class="cm-editor-container"></div>
                 </div>
                 <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">保存配置后，如果服务正在运行将自动触发热加载。</div>
             </div>
@@ -356,6 +360,11 @@ async function renderServiceDetailPage(params) {
             </div>
         `;
 
+        // 初始化 CodeMirror 编辑器
+        const CM = await window.CMReady;
+        CM.createPythonEditor('service-code-editor');
+        CM.createTomlEditor('service-config-editor');
+
         // 加载代码和配置
         loadServiceCode(name);
         loadServiceConfig(name);
@@ -370,9 +379,14 @@ async function renderServiceDetailPage(params) {
         main.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div class="title">出错了</div><p>${escapeHtml(e.message)}</p></div>`;
     }
 
-    currentCleanup = () => {
+    currentCleanup = async () => {
         if (logWs) { logWs.close(); logWs = null; }
         if (statusRefreshTimer) clearInterval(statusRefreshTimer);
+        try {
+            const CM = await window.CMReady;
+            CM.destroyEditor('service-code-editor');
+            CM.destroyEditor('service-config-editor');
+        } catch (e) { /* 忽略 */ }
     };
 }
 
@@ -410,13 +424,14 @@ async function restartServiceDetail(name) {
 async function loadServiceCode(name) {
     try {
         const data = await api.getServiceCode(name);
-        const editor = document.getElementById('service-code-editor');
-        if (editor) editor.value = data.code;
+        const CM = await window.CMReady;
+        CM.setEditorValue('service-code-editor', data.code);
     } catch (e) { /* 忽略 */ }
 }
 
 async function saveServiceCode(name) {
-    const code = document.getElementById('service-code-editor').value;
+    const CM = await window.CMReady;
+    const code = CM.getEditorValue('service-code-editor');
     try {
         const result = await api.updateServiceCode(name, code);
         showToast(result.message + (result.needs_restart ? ' - 需要重启' : ''));
@@ -437,13 +452,14 @@ async function uploadServiceCode(name, input) {
 async function loadServiceConfig(name) {
     try {
         const data = await api.getServiceConfig(name);
-        const editor = document.getElementById('service-config-editor');
-        if (editor) editor.value = data.config;
+        const CM = await window.CMReady;
+        CM.setEditorValue('service-config-editor', data.config);
     } catch (e) { /* 忽略 */ }
 }
 
 async function saveServiceConfig(name) {
-    const config = document.getElementById('service-config-editor').value;
+    const CM = await window.CMReady;
+    const config = CM.getEditorValue('service-config-editor');
     try {
         const result = await api.updateServiceConfig(name, config);
         showToast('配置已保存' + (result.hot_reloaded ? '并已热加载' : ''));
@@ -515,7 +531,12 @@ function toggleAutoScroll() {
 }
 
 // ── 弹窗辅助 ────────────────────────────────────────
-function closeModal() {
+async function closeModal() {
+    // 先销毁编辑器，再清空 DOM
+    try {
+        const CM = await window.CMReady;
+        CM.destroyAllEditors();
+    } catch (e) { /* 忽略 */ }
     document.getElementById('modal-overlay').classList.remove('open');
     document.getElementById('modal-overlay').innerHTML = '';
 }
