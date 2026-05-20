@@ -12,7 +12,7 @@ from app.schemas.module import (
     ServiceModulesUpdate, ServiceModulesResponse, ServiceModuleItem,
 )
 from app.core.module_manager import ModuleManager, ModuleNotFoundError, ModuleManagerError, BuiltinModuleError
-from app.core.module_loader import validate_module_code
+from app.utils.validation import validate_module_code
 
 router = APIRouter(prefix="/modules", tags=["modules"])
 module_manager = ModuleManager()

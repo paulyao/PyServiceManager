@@ -5,14 +5,15 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import MODULES_DIR, SERVICES_DIR, BUILTIN_MODULES_DIR
 from app.models.module import Module
 from app.models.service import Service
 from app.models.service_module import ServiceModule
-from app.utils.validation import validate_service_name, validate_python_code, validate_toml_content
-from app.core.module_loader import validate_module_code, get_module_template
+from app.utils.validation import validate_service_name, validate_python_code, validate_toml_content, validate_module_code
+from app.core.module_loader import get_module_template
 
 
 class ModuleManagerError(Exception):
@@ -100,7 +101,11 @@ class ModuleManager:
             created.append(name)
 
         if created:
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                raise ModuleManagerError(f"Database error while registering builtin modules: {e}")
 
         return created
 
@@ -162,8 +167,15 @@ class ModuleManager:
             config_path=str(config_path) if config_path else None,
         )
         session.add(module)
-        await session.commit()
-        await session.refresh(module)
+        try:
+            await session.commit()
+            await session.refresh(module)
+        except IntegrityError as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Module name conflict: {e}")
+        except Exception as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Database error while creating module: {e}")
         return module
 
     async def update(
@@ -231,8 +243,15 @@ class ModuleManager:
         if author is not None:
             module.author = author
         module.updated_at = datetime.now()
-        await session.commit()
-        await session.refresh(module)
+        try:
+            await session.commit()
+            await session.refresh(module)
+        except IntegrityError as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Module name conflict: {e}")
+        except Exception as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Database error while updating module: {e}")
         return module
 
     async def delete(self, session: AsyncSession, name: str) -> None:
@@ -249,7 +268,11 @@ class ModuleManager:
 
         # Delete DB record (cascades service_modules)
         await session.delete(module)
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Database error while deleting module: {e}")
 
     async def get(self, session: AsyncSession, name: str) -> Module:
         return await self._get_module(session, name)
@@ -301,8 +324,12 @@ class ModuleManager:
             module.config_path = str(config_path)
 
         module.updated_at = datetime.now()
-        await session.commit()
-        await session.refresh(module)
+        try:
+            await session.commit()
+            await session.refresh(module)
+        except Exception as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Database error while updating module code: {e}")
         return module
 
     async def get_code(self, session: AsyncSession, name: str) -> dict:
@@ -393,7 +420,11 @@ class ModuleManager:
                 session.add(new_binding)
                 changed.append(module_id)
 
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise ModuleManagerError(f"Database error while updating service module bindings: {e}")
 
         # Write modules registry file for runner
         await self._write_modules_registry(session, service)

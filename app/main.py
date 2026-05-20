@@ -1,11 +1,15 @@
 """PyService Manager - FastAPI application entry point."""
+import logging
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
+
+logger = logging.getLogger(__name__)
 
 from app.config import API_PREFIX, HOST, PORT, DATA_DIR, SERVICES_DIR, MODULES_DIR
 from app.database import init_db
@@ -65,9 +69,16 @@ from fastapi.responses import JSONResponse
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    # Let FastAPI's built-in handlers process these
+    if isinstance(exc, (HTTPException, RequestValidationError)):
+        raise exc
+
+    # Log unexpected exceptions with traceback
+    logger.exception(f"Unhandled exception on {request.method} {request.url.path}")
+
     return JSONResponse(
         status_code=500,
-        content={"error": {"code": "INTERNAL_ERROR", "message": str(exc)}},
+        content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}},
     )
 
 # Import and register routers

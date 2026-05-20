@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SERVICES_DIR, TEMPLATES_DIR, DEFAULT_PYTHON_PATH
@@ -168,13 +169,17 @@ class ProcessBackend(ServiceBackend):
             return await self.get_status(service)
 
         log_file = open(self._log_path(service), "a")
-        proc = subprocess.Popen(
-            [service.python_path, "-u", str(self._runner_path(service))],
-            stdout=log_file,
-            stderr=log_file,
-            cwd=service.working_dir,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        )
+        try:
+            proc = subprocess.Popen(
+                [service.python_path, "-u", str(self._runner_path(service))],
+                stdout=log_file,
+                stderr=log_file,
+                cwd=service.working_dir,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+        finally:
+            # Close fd in parent process; child has already inherited its own fd copy
+            log_file.close()
         # Write PID file
         self._pid_path(service).write_text(str(proc.pid))
         return {"active": "active", "enabled": False, "pid": proc.pid}
@@ -318,8 +323,15 @@ class ServiceManager:
             working_dir=str(service_dir),
         )
         session.add(service)
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except IntegrityError as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Service name conflict: {e}")
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while creating service: {e}")
 
         # Install unit file (systemd only)
         try:
@@ -351,7 +363,11 @@ class ServiceManager:
 
         # Remove database record (cascades service_modules)
         await session.delete(service)
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while deleting service: {e}")
 
     async def start(self, session: AsyncSession, name: str) -> Service:
         service = await self._get_service(session, name)
@@ -360,16 +376,24 @@ class ServiceManager:
         if service.status in ("active", "running"):
             service.status = "running"
             service.started_at = datetime.now()
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while updating service status: {e}")
         return service
 
     async def stop(self, session: AsyncSession, name: str) -> Service:
         service = await self._get_service(session, name)
         status = await self._backend.stop(service)
         service.status = "stopped"
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while updating service status: {e}")
         return service
 
     async def restart(self, session: AsyncSession, name: str) -> Service:
@@ -378,24 +402,36 @@ class ServiceManager:
         service.status = "running" if status["active"] in ("active", "running") else "failed"
         if service.status == "running":
             service.started_at = datetime.now()
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while updating service status: {e}")
         return service
 
     async def enable(self, session: AsyncSession, name: str) -> Service:
         service = await self._get_service(session, name)
         await self._backend.enable(service)
         service.enabled = True
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while enabling service: {e}")
         return service
 
     async def disable(self, session: AsyncSession, name: str) -> Service:
         service = await self._get_service(session, name)
         await self._backend.disable(service)
         service.enabled = False
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while disabling service: {e}")
         return service
 
     async def get_status(self, session: AsyncSession, name: str) -> dict:
@@ -413,7 +449,11 @@ class ServiceManager:
                 svc.status = new_status
             except Exception:
                 svc.status = "unknown"
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while syncing service status: {e}")
 
     async def update_code(self, session: AsyncSession, name: str, code: str) -> Service:
         service = await self._get_service(session, name)
@@ -424,8 +464,12 @@ class ServiceManager:
         main_path = SERVICES_DIR / name / "main.py"
         main_path.write_text(code, encoding="utf-8")
         service.updated_at = datetime.now()
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while updating service code: {e}")
         return service
 
     async def get_code(self, session: AsyncSession, name: str) -> str:
@@ -449,8 +493,12 @@ class ServiceManager:
             await self._signal_reload(service)
 
         service.updated_at = datetime.now()
-        await session.commit()
-        await session.refresh(service)
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise ServiceManagerError(f"Database error while updating service config: {e}")
         return service
 
     async def get_config(self, session: AsyncSession, name: str) -> str:
