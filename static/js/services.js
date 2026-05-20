@@ -498,6 +498,13 @@ async function saveServiceModules(name) {
 }
 
 // ── 日志 ─────────────────────────────────────────────
+function getLogLevelClass(text) {
+    if (text.includes('[ERROR]')) return 'log-line log-error';
+    if (text.includes('[WARN]')) return 'log-line log-warn';
+    if (text.includes('[INFO]')) return 'log-line log-info';
+    return 'log-line';
+}
+
 let autoScroll = true;
 
 async function loadServiceLogs(name) {
@@ -505,7 +512,7 @@ async function loadServiceLogs(name) {
         const data = await api.getServiceLogs(name, 200);
         const viewer = document.getElementById('log-viewer');
         if (viewer && data.logs) {
-            viewer.innerHTML = data.logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('');
+            viewer.innerHTML = data.logs.map(l => `<div class="${getLogLevelClass(l)}">${escapeHtml(l)}</div>`).join('');
             if (autoScroll) viewer.scrollTop = viewer.scrollHeight;
         }
     } catch (e) { /* 忽略 */ }
@@ -519,7 +526,7 @@ function connectLogWs(name) {
             const viewer = document.getElementById('log-viewer');
             if (viewer) {
                 const line = document.createElement('div');
-                line.className = 'log-line';
+                line.className = getLogLevelClass(event.data);
                 line.textContent = event.data;
                 viewer.appendChild(line);
                 if (autoScroll) viewer.scrollTop = viewer.scrollHeight;
