@@ -61,7 +61,8 @@ class Module:
 
     def log(self, message, level="INFO"):
         """Log a message - accessible via modules["log-enhancer"].log()"""
-        print(f"[{level}] {message}")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{timestamp} [{level}] {message}")
 
     def _cleanup_loop(self):
         """Background loop that periodically cleans up old log entries."""
