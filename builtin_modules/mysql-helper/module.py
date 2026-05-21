@@ -139,8 +139,8 @@ class Module:
         self._pool = None
 
     def on_start(self, ctx):
-        max_idle = ctx.config.get("pool", {}).get("max_idle_connections", 5)
-        idle_timeout = ctx.config.get("pool", {}).get("idle_timeout", 300)
+        max_idle = ctx.module_config.get("pool", {}).get("max_idle_connections", 5)
+        idle_timeout = ctx.module_config.get("pool", {}).get("idle_timeout", 300)
         self._pool = ConnectionPool(max_idle=max_idle, idle_timeout=idle_timeout)
         ctx.logger.info(
             f"Module {self.name} started - service: {ctx.service_name}, "
@@ -155,8 +155,8 @@ class Module:
 
     def on_config_reload(self, ctx):
         if self._pool:
-            max_idle = ctx.config.get("pool", {}).get("max_idle_connections")
-            idle_timeout = ctx.config.get("pool", {}).get("idle_timeout")
+            max_idle = ctx.module_config.get("pool", {}).get("max_idle_connections")
+            idle_timeout = ctx.module_config.get("pool", {}).get("idle_timeout")
             self._pool.update_config(max_idle=max_idle, idle_timeout=idle_timeout)
             ctx.logger.info(
                 f"Module {self.name} config reloaded - "
