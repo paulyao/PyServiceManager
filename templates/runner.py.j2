@@ -224,7 +224,7 @@ def main():
             )
 
             modules_registry[mod_name] = (instance, ctx)
-            modules_namespace[mod_name] = ModuleProxy(instance)
+            modules_namespace[mod_name.lower()] = ModuleProxy(instance)
 
             # Call on_start
             if hasattr(instance, "on_start"):
