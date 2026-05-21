@@ -1,5 +1,6 @@
 """Service lifecycle management with dual backend support."""
 import asyncio
+import logging
 import os
 import shutil
 import signal
@@ -17,6 +18,8 @@ from app.models.service import Service
 from app.models.service_module import ServiceModule
 from app.utils.system import has_systemctl, systemctl, run_command, CommandResult, get_service_pid_from_file
 from app.utils.validation import validate_service_name, validate_python_code, validate_toml_content
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceManagerError(Exception):
@@ -65,6 +68,24 @@ class SystemdBackend(ServiceBackend):
     """Linux systemd backend."""
 
     async def start(self, service: Service) -> dict:
+        # If python_path is stale, regenerate unit file with current Python
+        if service.python_path and not Path(service.python_path).exists():
+            new_python_path = DEFAULT_PYTHON_PATH
+            logger.warning(
+                "Service '%s' python_path '%s' not found, regenerating unit file with '%s'",
+                service.name, service.python_path, new_python_path,
+            )
+            from app.core.runner_template import generate_unit
+            generate_unit(
+                service.name,
+                service.display_name or service.name,
+                SERVICES_DIR / service.name,
+                new_python_path,
+                service.auto_restart,
+            )
+            # Re-install the updated unit file
+            await self.install_unit(service)
+
         result = await systemctl("start", service.name)
         if not result.ok:
             raise ServiceCommandError(f"Failed to start {service.name}", result.stderr)
@@ -168,14 +189,27 @@ class ProcessBackend(ServiceBackend):
         if pid is not None:
             return await self.get_status(service)
 
+        # Auto-fix python_path: if stored path doesn't exist, fall back to current Python
+        python_path = service.python_path
+        if not python_path or not Path(python_path).exists():
+            python_path = DEFAULT_PYTHON_PATH
+            logger.warning(
+                "Service '%s' python_path '%s' not found, falling back to '%s'",
+                service.name, service.python_path, python_path,
+            )
+
         log_file = open(self._log_path(service), "a")
         try:
             proc = subprocess.Popen(
-                [service.python_path, "-u", str(self._runner_path(service))],
+                [python_path, "-u", str(self._runner_path(service))],
                 stdout=log_file,
                 stderr=log_file,
                 cwd=service.working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+        except FileNotFoundError as e:
+            raise ServiceManagerError(
+                f"Failed to start service '{service.name}': Python interpreter not found: {e}"
             )
         finally:
             # Close fd in parent process; child has already inherited its own fd copy
@@ -253,6 +287,9 @@ class ServiceManager:
         """Resolve python_path to an actual executable."""
         if python_path == "auto" or not python_path:
             return DEFAULT_PYTHON_PATH
+        # Validate that the explicitly provided path exists
+        if not Path(python_path).exists():
+            raise ServiceManagerError(f"Python interpreter not found: {python_path}")
         return python_path
 
     async def create(
@@ -371,6 +408,17 @@ class ServiceManager:
 
     async def start(self, session: AsyncSession, name: str) -> Service:
         service = await self._get_service(session, name)
+
+        # Fix stale python_path before starting: update DB and regenerate files
+        if service.python_path and not Path(service.python_path).exists():
+            new_python_path = DEFAULT_PYTHON_PATH
+            logger.warning(
+                "Service '%s' has stale python_path '%s', updating to '%s'",
+                service.name, service.python_path, new_python_path,
+            )
+            service.python_path = new_python_path
+            self._regenerate_service_files(service, new_python_path)
+
         status = await self._backend.start(service)
         service.status = status["active"] if status["active"] in ("active", "running") else "failed"
         if service.status in ("active", "running"):
@@ -507,6 +555,26 @@ class ServiceManager:
         if config_path.exists():
             return config_path.read_text(encoding="utf-8")
         return ""
+
+    def _regenerate_service_files(self, service: Service, new_python_path: str) -> None:
+        """Regenerate runner.py and systemd unit file with an updated python_path."""
+        service_dir = SERVICES_DIR / service.name
+        if not service_dir.exists():
+            return
+
+        from app.core.runner_template import generate_runner, generate_unit
+        generate_runner(service.name, service_dir, new_python_path)
+        generate_unit(
+            service.name,
+            service.display_name or service.name,
+            service_dir,
+            new_python_path,
+            service.auto_restart,
+        )
+        logger.info(
+            "Regenerated service files for '%s' with python_path: %s",
+            service.name, new_python_path,
+        )
 
     async def _signal_reload(self, service: Service) -> None:
         """Send SIGHUP to a running service."""
