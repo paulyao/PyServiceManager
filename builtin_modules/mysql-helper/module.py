@@ -63,6 +63,7 @@ class ConnectionPool:
                 # Ping to verify the connection is still alive
                 try:
                     conn.ping(reconnect=False)
+                    conn.autocommit(True)  # 重置 autocommit 状态
                     return conn
                 except Exception:
                     try:
@@ -81,6 +82,7 @@ class ConnectionPool:
             connect_timeout=connect_timeout,
             read_timeout=read_timeout,
             write_timeout=write_timeout,
+            autocommit=True,  # 默认自动提交，避免隐式长事务
         )
 
     def put(self, conn, host, port, user, password, database):
@@ -89,6 +91,15 @@ class ConnectionPool:
         with self._lock:
             pool = self._pools[key]
             if len(pool) < self._max_idle:
+                # 确保归还的连接是干净的（autocommit=True，无未提交事务）
+                try:
+                    conn.autocommit(True)
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    return
                 pool.append((conn, time.time()))
             else:
                 try:
@@ -132,7 +143,7 @@ class ConnectionPool:
 
 class Module:
     name = "mysql-helper"
-    version = "2.0.0"
+    version = "2.1.0"
     description = "Generic MySQL read/write module with connection pooling"
 
     def __init__(self):
@@ -198,7 +209,17 @@ class Module:
                 connect_timeout, read_timeout, write_timeout,
             )
             with connection.cursor() as cursor:
-                cursor.execute(sql, params)
+                if commit:
+                    # 显式事务：关闭 autocommit，执行，提交
+                    connection.autocommit(False)
+                    try:
+                        cursor.execute(sql, params)
+                        connection.commit()
+                    finally:
+                        connection.autocommit(True)  # 恢复 autocommit
+                else:
+                    # autocommit=True 下直接执行（SELECT 不会持有事务）
+                    cursor.execute(sql, params)
 
                 if sql.strip().upper().startswith("SELECT"):
                     rows = cursor.fetchall()
@@ -210,8 +231,6 @@ class Module:
                         "error": None,
                     }
                 else:
-                    if commit:
-                        connection.commit()
                     result = {
                         "success": True,
                         "rows": None,
@@ -224,13 +243,13 @@ class Module:
             return result
 
         except Exception as e:
-            if connection and commit:
+            if connection:
                 try:
                     connection.rollback()
+                    connection.autocommit(True)  # 恢复 autocommit
                 except Exception:
                     pass
-            # Discard broken connection (do not return to pool)
-            if connection:
+                # Discard broken connection (do not return to pool)
                 self._pool.discard(connection)
             return {
                 "success": False,
@@ -271,9 +290,13 @@ class Module:
                 host, port, user, password, database, charset,
                 connect_timeout, read_timeout, write_timeout,
             )
-            with connection.cursor() as cursor:
-                cursor.executemany(sql, params_list or [])
-                connection.commit()
+            connection.autocommit(False)  # 批量操作用显式事务
+            try:
+                with connection.cursor() as cursor:
+                    cursor.executemany(sql, params_list or [])
+                    connection.commit()
+            finally:
+                connection.autocommit(True)  # 恢复 autocommit
             # Return connection to pool on success
             self._pool.put(connection, host, port, user, password, database)
             return {
@@ -285,6 +308,7 @@ class Module:
             if connection:
                 try:
                     connection.rollback()
+                    connection.autocommit(True)  # 恢复 autocommit
                 except Exception:
                     pass
                 # Discard broken connection
