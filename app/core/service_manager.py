@@ -674,11 +674,23 @@ class ServiceManager:
             else:
                 logger.warning("No PID file found for service '%s', cannot send reload signal", service.name)
         else:
-            result = await run_command(["systemctl", "reload", f"{service.name}.service"])
-            if result.ok:
-                logger.info("Reloaded service '%s' via systemctl", service.name)
+            # For systemd: get MainPID and send SIGHUP directly
+            # This avoids dependency on ExecReload in the unit file
+            show_result = await run_command(
+                ["systemctl", "show", f"{service.name}.service", "--property=MainPID"]
+            )
+            if show_result.ok and "MainPID=" in show_result.stdout:
+                try:
+                    pid = int(show_result.stdout.split("MainPID=")[1].strip())
+                    if pid > 0:
+                        os.kill(pid, signal.SIGHUP)
+                        logger.info("Sent SIGHUP to service '%s' (PID: %s) via systemctl show", service.name, pid)
+                    else:
+                        logger.warning("Service '%s' is not running (MainPID=0)", service.name)
+                except (ValueError, ProcessLookupError) as e:
+                    logger.error("Failed to send SIGHUP to service '%s': %s", service.name, e)
             else:
-                logger.error("Failed to reload service '%s': %s", service.name, result.stderr)
+                logger.error("Failed to get MainPID for service '%s': %s", service.name, show_result.stderr)
 
     async def _get_service(self, session: AsyncSession, name: str) -> Service:
         result = await session.execute(select(Service).where(Service.name == name))
