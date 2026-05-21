@@ -23,10 +23,10 @@ except ImportError:
 
 # ── Paths ──────────────────────────────────────────────────────
 SERVICE_NAME = "{{ service_name }}"
-SERVICE_DIR = Path("{{ service_dir }}")
-CONFIG_PATH = Path("{{ config_path }}")
-MAIN_PATH = Path("{{ main_path }}")
-LOG_PATH = Path("{{ log_path }}")
+SERVICE_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = SERVICE_DIR / "config.toml"
+MAIN_PATH = SERVICE_DIR / "main.py"
+LOG_PATH = SERVICE_DIR / "runner.log"
 
 # Module registry file (written by platform before start)
 MODULES_REGISTRY = SERVICE_DIR / ".modules.json"

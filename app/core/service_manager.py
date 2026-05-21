@@ -198,6 +198,11 @@ class ProcessBackend(ServiceBackend):
                 service.name, service.python_path, python_path,
             )
 
+        if not Path(service.working_dir).exists():
+            raise ServiceManagerError(
+                f"Service '{service.name}' working directory not found: {service.working_dir}"
+            )
+
         log_file = open(self._log_path(service), "a")
         try:
             proc = subprocess.Popen(
@@ -418,6 +423,15 @@ class ServiceManager:
             )
             service.python_path = new_python_path
             self._regenerate_service_files(service, new_python_path)
+
+        # Fix stale working_dir: always use current SERVICES_DIR layout
+        expected_working_dir = str(SERVICES_DIR / service.name)
+        if service.working_dir != expected_working_dir:
+            logger.warning(
+                "Service '%s' has stale working_dir '%s', updating to '%s'",
+                service.name, service.working_dir, expected_working_dir,
+            )
+            service.working_dir = expected_working_dir
 
         status = await self._backend.start(service)
         service.status = status["active"] if status["active"] in ("active", "running") else "failed"
