@@ -1,5 +1,6 @@
 """Service lifecycle management with dual backend support."""
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -13,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import SERVICES_DIR, TEMPLATES_DIR, DEFAULT_PYTHON_PATH
+from app.config import MODULES_DIR, SERVICES_DIR, TEMPLATES_DIR, DEFAULT_PYTHON_PATH
+from app.models.module import Module
 from app.models.service import Service
 from app.models.service_module import ServiceModule
 from app.utils.system import has_systemctl, systemctl, run_command, CommandResult, get_service_pid_from_file
@@ -414,7 +416,11 @@ class ServiceManager:
     async def start(self, session: AsyncSession, name: str) -> Service:
         service = await self._get_service(session, name)
 
-        # Fix stale python_path before starting: update DB and regenerate files
+        # Detect stale paths and track whether files need regeneration
+        needs_regenerate = False
+        new_python_path = service.python_path
+
+        # Fix stale python_path: update DB and regenerate files
         if service.python_path and not Path(service.python_path).exists():
             new_python_path = DEFAULT_PYTHON_PATH
             logger.warning(
@@ -422,7 +428,7 @@ class ServiceManager:
                 service.name, service.python_path, new_python_path,
             )
             service.python_path = new_python_path
-            self._regenerate_service_files(service, new_python_path)
+            needs_regenerate = True
 
         # Fix stale working_dir: always use current SERVICES_DIR layout
         expected_working_dir = str(SERVICES_DIR / service.name)
@@ -432,6 +438,16 @@ class ServiceManager:
                 service.name, service.working_dir, expected_working_dir,
             )
             service.working_dir = expected_working_dir
+            needs_regenerate = True
+
+        # Regenerate service files (runner.py + unit) and reinstall unit if needed
+        if needs_regenerate:
+            self._regenerate_service_files(service, new_python_path)
+            if isinstance(self._backend, SystemdBackend):
+                await self._backend.install_unit(service)
+
+        # Fix stale module paths and rewrite .modules.json before starting
+        await self._fix_stale_module_paths(session, service)
 
         status = await self._backend.start(service)
         service.status = status["active"] if status["active"] in ("active", "running") else "failed"
@@ -569,6 +585,61 @@ class ServiceManager:
         if config_path.exists():
             return config_path.read_text(encoding="utf-8")
         return ""
+
+    async def _fix_stale_module_paths(self, session: AsyncSession, service: Service) -> None:
+        """Fix stale module paths in DB and rewrite .modules.json."""
+        bindings_result = await session.execute(
+            select(ServiceModule).where(
+                ServiceModule.service_id == service.id,
+                ServiceModule.enabled == True,  # noqa: E712
+            ).order_by(ServiceModule.load_order)
+        )
+        bindings = bindings_result.scalars().all()
+
+        registry = []
+        paths_updated = False
+        for binding in bindings:
+            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
+            mod = mod_result.scalar_one_or_none()
+            if not mod:
+                continue
+
+            # Check and fix script_path
+            expected_script = str(MODULES_DIR / mod.name / "module.py")
+            expected_config = str(MODULES_DIR / mod.name / "config.toml")
+
+            if mod.script_path != expected_script and not Path(mod.script_path).exists():
+                logger.warning(
+                    "Module '%s' has stale script_path '%s', updating to '%s'",
+                    mod.name, mod.script_path, expected_script,
+                )
+                mod.script_path = expected_script
+                paths_updated = True
+
+            if mod.config_path and mod.config_path != expected_config and not Path(mod.config_path).exists():
+                logger.warning(
+                    "Module '%s' has stale config_path '%s', updating to '%s'",
+                    mod.name, mod.config_path, expected_config,
+                )
+                mod.config_path = expected_config
+                paths_updated = True
+
+            registry.append({
+                "name": mod.name,
+                "script_path": mod.script_path,
+                "config_path": mod.config_path or "",
+            })
+
+        if paths_updated:
+            try:
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.error("Failed to update module paths: %s", e)
+
+        # Always rewrite .modules.json with current paths
+        registry_path = SERVICES_DIR / service.name / ".modules.json"
+        registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
 
     def _regenerate_service_files(self, service: Service, new_python_path: str) -> None:
         """Regenerate runner.py and systemd unit file with an updated python_path."""
