@@ -88,6 +88,8 @@ body {
     flex: 1;
     padding: 24px 32px;
     min-height: 100vh;
+    min-width: 0;
+    overflow-x: hidden;
 }
 
 /* Page Header */
@@ -344,6 +346,8 @@ body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
+    width: 100%;
+    max-width: 100%;
 }
 
 .editor-toolbar {
@@ -356,14 +360,22 @@ body {
 }
 
 /* CodeMirror editor container */
+.cm-editor-container {
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+}
+
 .cm-editor-container .cm-editor {
     font-size: 13px;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
     border-radius: var(--radius);
+    max-width: 100%;
 }
 
 .cm-editor-container .cm-editor .cm-scroller {
     font-family: inherit;
+    overflow-x: auto;
 }
 
 .cm-editor-container .cm-editor.cm-focused {
@@ -459,4 +471,5 @@ body {
     .sidebar .nav-text, .sidebar-logo span:last-child { display: none; }
     .main-content { margin-left: 60px; padding: 16px; }
     .card-grid { grid-template-columns: 1fr; }
+    .modal { width: 95%; padding: 16px; }
 }
