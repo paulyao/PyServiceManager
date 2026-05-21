@@ -668,10 +668,17 @@ class ServiceManager:
             if pid:
                 try:
                     os.kill(pid, signal.SIGHUP)
+                    logger.info("Sent SIGHUP to service '%s' (PID: %s)", service.name, pid)
                 except ProcessLookupError:
-                    pass
+                    logger.warning("Service '%s' process (PID: %s) not found", service.name, pid)
+            else:
+                logger.warning("No PID file found for service '%s', cannot send reload signal", service.name)
         else:
-            await run_command(["systemctl", "reload", f"{service.name}.service"])
+            result = await run_command(["systemctl", "reload", f"{service.name}.service"])
+            if result.ok:
+                logger.info("Reloaded service '%s' via systemctl", service.name)
+            else:
+                logger.error("Failed to reload service '%s': %s", service.name, result.stderr)
 
     async def _get_service(self, session: AsyncSession, name: str) -> Service:
         result = await session.execute(select(Service).where(Service.name == name))

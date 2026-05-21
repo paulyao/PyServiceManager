@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={{ python_path }} -u {{ runner_path }}
+ExecReload=/bin/kill -HUP $MAINPID
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory={{ working_dir }}
 {% if auto_restart %}Restart=on-failure
