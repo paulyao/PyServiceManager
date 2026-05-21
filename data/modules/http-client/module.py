@@ -16,9 +16,55 @@ Usage in service code:
 """
 
 import json as _json_mod
+import ssl
 import urllib.request
 import urllib.parse
 import urllib.error
+
+
+def _create_ssl_context():
+    """创建 SSL 上下文，自动加载系统根证书。
+
+    macOS/Linux 上 Python 默认可能不加载系统证书，需要手动创建
+    SSL 上下文并通过 certifi 或系统证书路径来加载。
+    """
+    ctx = ssl.create_default_context()
+    # 1. 尝试加载 certifi 提供的证书包（如果已安装）
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+        return ctx
+    except ImportError:
+        pass
+    # 2. 尝试加载系统证书路径
+    import platform
+    system = platform.system()
+    cert_paths = []
+    if system == "Darwin":
+        cert_paths = [
+            "/etc/ssl/cert.pem",
+            "/usr/local/etc/openssl@3/cert.pem",
+            "/usr/local/etc/openssl@1.1/cert.pem",
+            "/opt/homebrew/etc/openssl@3/cert.pem",
+            "/opt/homebrew/etc/ca-certificates/cert.pem",
+        ]
+    elif system == "Linux":
+        cert_paths = [
+            "/etc/ssl/certs/ca-certificates.crt",       # Debian/Ubuntu
+            "/etc/ssl/certs/ca-bundle.crt",             # Debian (alternative)
+            "/etc/pki/tls/certs/ca-bundle.crt",         # RHEL/CentOS
+            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",  # RHEL/CentOS 7+
+            "/etc/ssl/ca-bundle.pem",                    # OpenSUSE
+            "/etc/ssl/cert.pem",                         # Alpine
+            "/etc/pki/tls/cacert.pem",                   # Older RHEL
+        ]
+    for path in cert_paths:
+        try:
+            ctx.load_verify_locations(path)
+            return ctx
+        except (OSError, ssl.SSLError):
+            continue
+    return ctx
 
 
 class Module:
@@ -153,7 +199,8 @@ class Module:
             req.add_header("User-Agent", "PyService-HttpClient/1.0")
 
             # Send request
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            ssl_ctx = _create_ssl_context()
+            with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as response:
                 status_code = response.status
                 resp_headers = dict(response.headers)
                 resp_body = response.read().decode("utf-8", errors="replace")
