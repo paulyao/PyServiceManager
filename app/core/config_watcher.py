@@ -1,5 +1,6 @@
 """Watchdog-based config file watcher for hot-reload."""
 import asyncio
+import logging
 import os
 import signal
 import threading
@@ -10,6 +11,8 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 
 from app.config import SERVICES_DIR
 from app.utils.system import get_service_pid_from_file
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigEventHandler(FileSystemEventHandler):
@@ -80,4 +83,12 @@ class ConfigWatcher:
         """Stop watching."""
         if self._observer:
             self._observer.stop()
-            self._observer.join(timeout=5)
+            # 在线程池中执行阻塞的 join，避免阻塞事件循环
+            try:
+                await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, self._observer.join),
+                    timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Watchdog observer did not terminate within 2s timeout")
+            self._observer = None

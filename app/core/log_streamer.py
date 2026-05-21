@@ -26,6 +26,7 @@ class LogStreamer:
 
     def __init__(self):
         self._active_connections: dict[str, Set[WebSocket]] = {}
+        self._shutdown = False  # 关闭标志
 
     def _log_path(self, service_name: str) -> Path:
         return SERVICES_DIR / service_name / "runner.log"
@@ -108,6 +109,9 @@ class LogStreamer:
                     if line:
                         await self._safe_send(websocket, line.rstrip("\n"))
                     else:
+                        # 使用短超时的等待，可以快速响应关闭
+                        if self._shutdown:
+                            break
                         await asyncio.sleep(self.POLL_INTERVAL)
 
         except WebSocketDisconnect:
@@ -149,6 +153,10 @@ class LogStreamer:
 
     def has_connections(self, service_name: str) -> bool:
         return bool(self._active_connections.get(service_name))
+
+    def shutdown(self):
+        """Signal all streaming loops to stop."""
+        self._shutdown = True
 
 
 # Global instance

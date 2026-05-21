@@ -52,6 +52,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    from app.core.log_streamer import log_streamer
+    log_streamer.shutdown()  # 通知所有 WebSocket 循环退出
     await config_watcher.stop()
 
 
@@ -116,7 +118,7 @@ async def health():
 
 def cli():
     """CLI entry point."""
-    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=True)
+    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=True, timeout_graceful_shutdown=3)
 
 
 if __name__ == "__main__":
