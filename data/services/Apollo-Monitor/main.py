@@ -40,7 +40,7 @@ def run(config, modules):
         config: 来自 config.toml 的配置字典
         modules: 模块命名空间字典
     """
-    interval = config.get("monitor", {}).get("interval", 5)
+    interval = config.get("interval", {}).get("minutes", 1)
     auto_encrypt = config.get("monitor", {}).get("auto_encrypt", False)
 
     mysql_mod = modules.get("mysql-helper")

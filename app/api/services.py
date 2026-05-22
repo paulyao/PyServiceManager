@@ -1,9 +1,11 @@
 """Service management API routes."""
 from datetime import datetime
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import SERVICES_DIR
 from app.database import get_session
 from app.models.service import Service
 from app.models.module import Module
@@ -11,11 +13,13 @@ from app.models.service_module import ServiceModule
 from app.schemas.service import (
     ServiceCreate, ServiceUpdate, ServiceResponse, ServiceStatus,
     CodeUpdate, ConfigUpdate, ServiceDepsResponse, ModuleDepSource,
-    RequirementsUpdate,
+    RequirementsUpdate, ModuleScanSource, ScanComparisonItem,
+    ServiceScanResultItem,
 )
-from app.schemas.module import PkgStatusItem, DepsInstallResponse
+from app.schemas.module import PkgStatusItem, DepsInstallResponse, ScannedImportItem, SourceScanResultItem
 from app.core.service_manager import ServiceManager, ServiceNotFoundError, ServiceManagerError
 from app.utils.dependency import check_requirements, install_requirements
+from app.utils.import_scanner import scan_source_file, build_scan_comparison
 from app.utils.validation import validate_requirements
 
 router = APIRouter(prefix="/services", tags=["services"])
@@ -179,8 +183,11 @@ async def upload_service_script(name: str, file: UploadFile = File(...), session
 
 # ── Dependency Management ──────────────────────────────────────
 
-async def _get_service_deps_data(name: str, session: AsyncSession):
-    """Collect all dependency data for a service (self + enabled modules)."""
+async def _get_service_deps_data(name: str, session: AsyncSession, scan: bool = False):
+    """Collect all dependency data for a service (self + enabled modules).
+
+    When scan=True, also analyzes source code imports via AST scanning.
+    """
     result = await session.execute(select(Service).where(Service.name == name))
     service = result.scalar_one_or_none()
     if service is None:
@@ -221,7 +228,8 @@ async def _get_service_deps_data(name: str, session: AsyncSession):
     agg_check = check_requirements(all_specs)
     agg_items = [PkgStatusItem(**vars(s)) for s in agg_check.requirements]
 
-    return ServiceDepsResponse(
+    # Build base response
+    response = ServiceDepsResponse(
         service_requirements=svc_items,
         module_requirements=module_deps,
         all_requirements=agg_items,
@@ -229,10 +237,65 @@ async def _get_service_deps_data(name: str, session: AsyncSession):
         missing_count=len(agg_check.missing) + len(agg_check.unsatisfied),
     )
 
+    # Source code scanning (optional)
+    if scan:
+        service_dir = SERVICES_DIR / service.name
+        # Scan service main.py
+        svc_scan_result = scan_source_file(service_dir / "main.py", service_dir)
+        svc_scan_item = SourceScanResultItem(
+            file_path=svc_scan_result.file_path,
+            imports=[ScannedImportItem(**vars(imp)) for imp in svc_scan_result.imports],
+            third_party_packages=svc_scan_result.third_party_packages,
+            error=svc_scan_result.error,
+        )
+
+        # Scan enabled module files
+        module_scans: list[ModuleScanSource] = []
+        all_scanned_packages: list[str] = list(svc_scan_result.third_party_packages)
+
+        for binding in bindings:
+            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
+            mod = mod_result.scalar_one_or_none()
+            if mod and mod.script_path:
+                mod_path = Path(mod.script_path)
+                mod_scan_result = scan_source_file(mod_path)
+                mod_scan_item = SourceScanResultItem(
+                    file_path=mod_scan_result.file_path,
+                    imports=[ScannedImportItem(**vars(imp)) for imp in mod_scan_result.imports],
+                    third_party_packages=mod_scan_result.third_party_packages,
+                    error=mod_scan_result.error,
+                )
+                module_scans.append(ModuleScanSource(
+                    module_name=mod.name,
+                    module_display_name=mod.display_name,
+                    scan=mod_scan_item,
+                ))
+                all_scanned_packages.extend(mod_scan_result.third_party_packages)
+
+        # Build scan comparison
+        comparison = build_scan_comparison(all_specs, all_scanned_packages)
+
+        response.scanned_imports = ServiceScanResultItem(
+            service_scan=svc_scan_item,
+            module_scans=module_scans,
+            all_third_party=all_scanned_packages,
+        )
+        response.scan_comparison = ScanComparisonItem(
+            matched=comparison.matched,
+            scanned_only=comparison.scanned_only,
+            declared_only=comparison.declared_only,
+        )
+
+    return response
+
 
 @router.get("/{name}/deps", response_model=ServiceDepsResponse)
-async def check_service_deps(name: str, session: AsyncSession = Depends(get_session)):
-    """Get aggregated dependency status for a service (self + enabled modules)."""
+async def check_service_deps(name: str, scan: bool = False, session: AsyncSession = Depends(get_session)):
+    """Get aggregated dependency status for a service (self + enabled modules).
+
+    When scan=true, also analyzes source code imports via AST scanning.
+    """
+    return await _get_service_deps_data(name, session, scan=scan)
     return await _get_service_deps_data(name, session)
 
 

@@ -112,5 +112,22 @@ class DepsInstallResponse(BaseModel):
     output: str
 
 
+class ScannedImportItem(BaseModel):
+    """Single import statement found by source code scanning."""
+    module_name: str
+    full_path: str
+    import_type: str        # "stdlib" / "third_party" / "local"
+    line_number: int
+    pip_name: str | None
+
+
+class SourceScanResultItem(BaseModel):
+    """Scan result for a single source file."""
+    file_path: str
+    imports: list[ScannedImportItem]
+    third_party_packages: list[str]
+    error: str | None = None
+
+
 class RequirementsUpdate(BaseModel):
     requirements: list[str]

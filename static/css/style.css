@@ -522,6 +522,88 @@ body {
     border: 1px solid var(--border);
 }
 
+/* ── Code scan styles ─────────────────────────────── */
+.scan-file-group {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+}
+.scan-file-header {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.scan-import-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--text);
+}
+.scan-import-name {
+    font-family: var(--font-mono, 'Menlo', 'Consolas', monospace);
+    font-size: 12px;
+}
+.scan-tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+.scan-tag-stdlib { background: rgba(149,165,166,0.15); color: var(--text-muted); }
+.scan-tag-third-party { background: rgba(52,152,219,0.15); color: #3498db; }
+.scan-tag-local { background: rgba(149,165,166,0.1); color: var(--text-muted); }
+.scan-stdlib-toggle {
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    user-select: none;
+}
+.scan-stdlib-toggle:hover { color: var(--text-secondary); }
+.scan-stdlib-arrow { font-size: 10px; }
+.scan-stdlib-list { padding-left: 4px; }
+
+.scan-comparison {
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+}
+.scan-cmp-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 13px;
+}
+.scan-cmp-icon { font-size: 13px; flex-shrink: 0; }
+.scan-cmp-label { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+.scan-cmp-matched { color: var(--success); }
+.scan-cmp-scanned-only { color: #e67e22; }
+.scan-cmp-declared-only { color: var(--text-muted); }
+.scan-add-btn {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--primary);
+    background: transparent;
+    color: var(--primary);
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+.scan-add-btn:hover { background: var(--primary); color: #fff; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

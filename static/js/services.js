@@ -375,7 +375,9 @@ async function renderServiceDetailPage(params) {
                     </div>
                     <textarea class="form-textarea" id="svc-requirements" rows="3" placeholder="每行一个依赖，如 requests>=2.28">${escapeHtml((service.requirements || []).join('\n'))}</textarea>
                 </div>
+                <div id="svc-deps-scan-section" style="margin-top:20px"></div>
                 <div id="svc-deps-module-section" style="margin-top:20px"></div>
+                <div id="svc-deps-comparison" style="margin-top:16px"></div>
                 <div id="svc-deps-summary" style="margin-top:16px"></div>
                 <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
                     <button class="btn btn-outline" onclick="loadServiceDeps('${name}')">检查所有依赖</button>
@@ -436,11 +438,136 @@ function switchTab(el) {
 
 // ── 依赖管理 ─────────────────────────────────────────
 
+function _renderScanImports(imports) {
+    const stdlibImports = imports.filter(i => i.import_type === 'stdlib');
+    const thirdPartyImports = imports.filter(i => i.import_type === 'third_party');
+    const localImports = imports.filter(i => i.import_type === 'local');
+
+    let html = '';
+
+    // Third-party imports (always shown)
+    thirdPartyImports.forEach(imp => {
+        const pipDisplay = imp.pip_name && imp.pip_name !== imp.module_name
+            ? ` <span style="color:var(--text-muted);font-size:11px">&rarr; ${escapeHtml(imp.pip_name)}</span>` : '';
+        html += `<div class="scan-import-item">
+            <span class="scan-import-name">${escapeHtml(imp.full_path)}${pipDisplay}</span>
+            <span class="scan-tag scan-tag-third-party">第三方</span>
+        </div>`;
+    });
+
+    // Local imports
+    localImports.forEach(imp => {
+        html += `<div class="scan-import-item">
+            <span class="scan-import-name">${escapeHtml(imp.full_path)}</span>
+            <span class="scan-tag scan-tag-local">本地</span>
+        </div>`;
+    });
+
+    // Stdlib imports (collapsible)
+    if (stdlibImports.length > 0) {
+        html += `<div class="scan-stdlib-toggle" onclick="var n=this.nextElementSibling;n.style.display=n.style.display==='none'?'block':'none';this.querySelector('.scan-stdlib-arrow').textContent=n.style.display==='none'?'▸':'▾'">
+            <span class="scan-stdlib-arrow">▸</span> ${stdlibImports.length} 个标准库 import
+        </div>
+        <div class="scan-stdlib-list" style="display:none">
+            ${stdlibImports.map(imp => `<div class="scan-import-item">
+                <span class="scan-import-name">${escapeHtml(imp.full_path)}</span>
+                <span class="scan-tag scan-tag-stdlib">标准库</span>
+            </div>`).join('')}
+        </div>`;
+    }
+
+    return html || '<div style="color:var(--text-muted);font-size:12px">无 import 语句</div>';
+}
+
+function _renderScanSection(scannedImports) {
+    if (!scannedImports) return '';
+
+    let html = '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px">代码扫描结果</div>';
+
+    // Service scan
+    const svcScan = scannedImports.service_scan;
+    if (svcScan) {
+        if (svcScan.error) {
+            html += `<div class="scan-file-group"><div class="scan-file-header">main.py</div><div style="color:var(--danger);font-size:12px">${escapeHtml(svcScan.error)}</div></div>`;
+        } else {
+            html += `<div class="scan-file-group">
+                <div class="scan-file-header">main.py <span style="font-size:11px;color:var(--text-muted)">(${svcScan.third_party_packages.length} 个第三方依赖)</span></div>
+                ${_renderScanImports(svcScan.imports)}
+            </div>`;
+        }
+    }
+
+    // Module scans
+    if (scannedImports.module_scans && scannedImports.module_scans.length > 0) {
+        scannedImports.module_scans.forEach(modScan => {
+            const scan = modScan.scan;
+            if (scan.error) {
+                html += `<div class="scan-file-group"><div class="scan-file-header">${escapeHtml(modScan.module_display_name)}</div><div style="color:var(--danger);font-size:12px">${escapeHtml(scan.error)}</div></div>`;
+            } else {
+                html += `<div class="scan-file-group">
+                    <div class="scan-file-header">
+                        <span>${escapeHtml(modScan.module_display_name)}</span>
+                        <span style="font-size:11px;color:var(--text-muted)">${escapeHtml(modScan.module_name)} · ${scan.third_party_packages.length} 个第三方依赖</span>
+                    </div>
+                    ${_renderScanImports(scan.imports)}
+                </div>`;
+            }
+        });
+    }
+
+    return html;
+}
+
+function _renderScanComparison(comparison) {
+    if (!comparison) return '';
+
+    const hasContent = comparison.matched.length > 0 || comparison.scanned_only.length > 0 || comparison.declared_only.length > 0;
+    if (!hasContent) return '';
+
+    let html = '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px">声明 vs 代码扫描对比</div><div class="scan-comparison">';
+
+    if (comparison.matched.length > 0) {
+        html += comparison.matched.map(p =>
+            `<div class="scan-cmp-item scan-cmp-matched"><span class="scan-cmp-icon">&#10003;</span> ${escapeHtml(p)} <span class="scan-cmp-label">已声明 & 代码中有</span></div>`
+        ).join('');
+    }
+
+    if (comparison.scanned_only.length > 0) {
+        html += comparison.scanned_only.map(p =>
+            `<div class="scan-cmp-item scan-cmp-scanned-only"><span class="scan-cmp-icon">&#9888;</span> ${escapeHtml(p)} <span class="scan-cmp-label">代码中有但未声明</span> <button class="scan-add-btn" onclick="addScanPkgToRequirements('${escapeHtml(p)}')">+ 添加</button></div>`
+        ).join('');
+    }
+
+    if (comparison.declared_only.length > 0) {
+        html += comparison.declared_only.map(p =>
+            `<div class="scan-cmp-item scan-cmp-declared-only"><span class="scan-cmp-icon">&#8505;</span> ${escapeHtml(p)} <span class="scan-cmp-label">已声明但代码中未使用</span></div>`
+        ).join('');
+    }
+
+    html += '</div>';
+    return html;
+}
+
+function addScanPkgToRequirements(pkgName) {
+    const textarea = document.getElementById('svc-requirements');
+    if (!textarea) return;
+    const current = textarea.value.trim();
+    textarea.value = current ? current + '\n' + pkgName : pkgName;
+    showToast(`已添加 ${pkgName} 到依赖声明，请保存`);
+}
+
 async function loadServiceDeps(name) {
     try {
-        const result = await api.getServiceDeps(name);
+        const result = await api.getServiceDeps(name, true);
+        const scanSection = document.getElementById('svc-deps-scan-section');
         const modSection = document.getElementById('svc-deps-module-section');
+        const comparisonSection = document.getElementById('svc-deps-comparison');
         const summary = document.getElementById('svc-deps-summary');
+
+        // Render scan results
+        if (scanSection && result.scanned_imports) {
+            scanSection.innerHTML = _renderScanSection(result.scanned_imports);
+        }
 
         // Render module deps
         let modHtml = '';
@@ -466,16 +593,23 @@ async function loadServiceDeps(name) {
             ${modHtml}
         `;
 
+        // Render scan comparison
+        if (comparisonSection && result.scan_comparison) {
+            comparisonSection.innerHTML = _renderScanComparison(result.scan_comparison);
+        }
+
         // Render summary
         const svcCount = result.service_requirements ? result.service_requirements.length : 0;
         const totalCount = result.all_requirements ? result.all_requirements.length : 0;
         const satisfiedCount = result.all_requirements ? result.all_requirements.filter(r => r.satisfied).length : 0;
+        const scannedThirdParty = result.scanned_imports ? result.scanned_imports.all_third_party.length : 0;
         if (summary) summary.innerHTML = `
             <div class="dep-summary">
                 <div style="display:flex;gap:24px;justify-content:center;font-size:14px">
                     <div><strong>${totalCount}</strong> 总依赖</div>
                     <div style="color:var(--success)"><strong>${satisfiedCount}</strong> 已满足</div>
                     <div style="color:${result.all_satisfied ? 'var(--success)' : 'var(--danger)'}"><strong>${result.missing_count}</strong> ${result.all_satisfied ? '缺失' : '未满足'}</div>
+                    ${scannedThirdParty > 0 ? `<div style="color:var(--primary)"><strong>${scannedThirdParty}</strong> 代码扫描发现</div>` : ''}
                 </div>
                 ${result.all_satisfied ? '<div style="text-align:center;margin-top:8px;color:var(--success);font-size:13px">✓ 所有依赖已满足，服务可正常运行</div>' : ''}
             </div>

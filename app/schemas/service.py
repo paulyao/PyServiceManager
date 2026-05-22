@@ -78,15 +78,38 @@ class ModuleDepSource(BaseModel):
     requirements: list["PkgStatusItem"]
 
 
+class ModuleScanSource(BaseModel):
+    """Scan result for a single module's source file."""
+    module_name: str
+    module_display_name: str
+    scan: "SourceScanResultItem"
+
+
+class ScanComparisonItem(BaseModel):
+    """Comparison between scanned imports and declared requirements."""
+    matched: list[str]       # Both declared and found in code
+    scanned_only: list[str]  # Found in code but not declared
+    declared_only: list[str] # Declared but not found in code
+
+
+class ServiceScanResultItem(BaseModel):
+    """Aggregated scan result for a service and its modules."""
+    service_scan: "SourceScanResultItem"
+    module_scans: list[ModuleScanSource]
+    all_third_party: list[str]
+
+
 class ServiceDepsResponse(BaseModel):
     service_requirements: list["PkgStatusItem"]
     module_requirements: list[ModuleDepSource]
     all_requirements: list["PkgStatusItem"]
     all_satisfied: bool
     missing_count: int
+    scanned_imports: ServiceScanResultItem | None = None
+    scan_comparison: ScanComparisonItem | None = None
 
 
 # Import here to avoid circular references
-from app.schemas.module import PkgStatusItem  # noqa: E402
+from app.schemas.module import PkgStatusItem, SourceScanResultItem  # noqa: E402
 
 ServiceDepsResponse.model_rebuild()

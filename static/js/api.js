@@ -88,7 +88,7 @@ const api = {
     updateModuleRequirements: (name, requirements) => request('PUT', `/modules/${name}/requirements`, { requirements }),
 
     // Service dependencies
-    getServiceDeps: (name) => request('GET', `/services/${name}/deps`),
+    getServiceDeps: (name, scan = false) => request('GET', `/services/${name}/deps${scan ? '?scan=true' : ''}`),
     installServiceDeps: (name) => request('POST', `/services/${name}/deps/install`),
     updateServiceRequirements: (name, requirements) => request('PUT', `/services/${name}/requirements`, { requirements }),
 
