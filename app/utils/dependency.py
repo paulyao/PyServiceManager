@@ -23,6 +23,56 @@ _install_lock = asyncio.Lock()
 _INSTALL_TIMEOUT = 300
 
 
+def _find_uv() -> str | None:
+    """Find the uv executable path.
+
+    Checks in order:
+    1. PATH via shutil.which
+    2. Common install locations not always in PATH
+    3. The uv that manages the current venv (via pyvenv.cfg)
+    """
+    # 1. Check PATH
+    uv_path = shutil.which("uv")
+    if uv_path:
+        return uv_path
+
+    # 2. Common install locations
+    import os
+    home = os.path.expanduser("~")
+    common_paths = [
+        os.path.join(home, ".local", "bin", "uv"),
+        os.path.join(home, ".cargo", "bin", "uv"),
+        "/usr/local/bin/uv",
+        "/opt/homebrew/bin/uv",
+    ]
+    for p in common_paths:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+
+    # 3. Check pyvenv.cfg in the current venv for the uv that created it
+    venv = os.path.dirname(os.path.dirname(sys.executable))
+    cfg_path = os.path.join(venv, "pyvenv.cfg")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                for line in f:
+                    if "uv" in line.lower():
+                        # uv-created venv; try to find uv relative to the venv
+                        # e.g. /data/services/pyservice/.venv -> look for uv in parent's .local/bin
+                        parent = os.path.dirname(venv)
+                        for candidate in [
+                            os.path.join(parent, ".local", "bin", "uv"),
+                            os.path.join(os.path.dirname(parent), ".local", "bin", "uv"),
+                        ]:
+                            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                                return candidate
+                        break
+        except Exception:
+            pass
+
+    return None
+
+
 def _get_install_command() -> list[str]:
     """Get the package install command prefix.
 
@@ -30,8 +80,9 @@ def _get_install_command() -> list[str]:
     ensuring packages are installed into the current venv.
     Falls back to 'python -m pip install' when uv is not found.
     """
-    if shutil.which("uv"):
-        return ["uv", "pip", "install", "--python", sys.executable]
+    uv_path = _find_uv()
+    if uv_path:
+        return [uv_path, "pip", "install", "--python", sys.executable]
     return [sys.executable, "-m", "pip", "install"]
 
 
