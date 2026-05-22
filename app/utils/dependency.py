@@ -1,35 +1,60 @@
-"""Dependency checking and installation utilities."""
+"""Dependency checking and installation utilities.
+
+Provides PEP 508 requirement checking, version constraint validation,
+and package installation via uv (preferred) or pip (fallback).
+"""
 import asyncio
-import json
+import importlib
+import importlib.metadata
 import re
 import shutil
 import sys
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version as get_version
-from pathlib import Path
 
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
 
 from app.utils.system import run_command
 
-# Lock to prevent concurrent pip install processes
+# Lock to prevent concurrent install processes
 _install_lock = asyncio.Lock()
+
+# Install timeout in seconds (5 minutes for large packages)
+_INSTALL_TIMEOUT = 300
 
 
 def _get_install_command() -> list[str]:
     """Get the package install command prefix.
 
-    Uses 'uv pip install' when uv is available, falls back to 'pip install'.
+    Uses 'uv pip install --python <path>' when uv is available,
+    ensuring packages are installed into the current venv.
+    Falls back to 'python -m pip install' when uv is not found.
     """
     if shutil.which("uv"):
-        return ["uv", "pip", "install"]
+        return ["uv", "pip", "install", "--python", sys.executable]
     return [sys.executable, "-m", "pip", "install"]
 
 
 def normalize_package_name(name: str) -> str:
     """Normalize package name per PEP 503."""
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _invalidate_metadata_cache() -> None:
+    """Invalidate importlib.metadata caches after installing packages.
+
+    importlib.metadata may cache distribution info; calling this ensures
+    newly installed packages are discoverable by subsequent checks.
+    """
+    # Clear the per-distribution cache in importlib.metadata
+    # Works on Python 3.11+ where _cached_name is used internally
+    try:
+        importlib.invalidate_caches()
+        # Also clear the fast_path-based cache if present
+        if hasattr(importlib.metadata, "_cache"):
+            importlib.metadata._cache.clear()
+    except Exception:
+        pass
 
 
 @dataclass
@@ -40,6 +65,7 @@ class PkgStatus:
     installed: bool
     installed_version: str | None
     satisfied: bool
+    error: str | None = None
 
 
 @dataclass
@@ -58,6 +84,7 @@ class InstallResult:
     installed: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     output: str = ""
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 def validate_requirement_spec(spec: str) -> tuple[bool, str | None]:
@@ -96,6 +123,7 @@ def check_requirements(requirements: list[str]) -> CheckResult:
             statuses.append(PkgStatus(
                 name=spec, specifier="", installed=False,
                 installed_version=None, satisfied=False,
+                error=f"无效的依赖声明: {spec}",
             ))
             missing.append(spec)
             continue
@@ -133,12 +161,51 @@ def check_requirements(requirements: list[str]) -> CheckResult:
     )
 
 
-async def install_requirements(requirements: list[str]) -> InstallResult:
-    """Install unsatisfied requirements via pip.
+def _extract_error_message(result) -> str:
+    """Extract a human-readable error message from a command result."""
+    if result.returncode == -1:
+        # Timeout or command not found
+        if "timed out" in result.stderr.lower():
+            return f"安装超时({_INSTALL_TIMEOUT}s)"
+        if "not found" in result.stderr.lower():
+            return "安装命令未找到"
+        return result.stderr
 
+    # Parse pip/uv error output for common failure patterns
+    stderr = result.stderr
+    for pattern in [
+        r"Because (\S+) was not found in the package registry",
+        r"No matching distribution found for (\S+)",
+        r"ERROR: Could not find a version that satisfies the requirement (\S+)",
+        r"error: No solution found for (\S+)",
+    ]:
+        import re as _re
+        m = _re.search(pattern, stderr)
+        if m:
+            return f"找不到匹配的版本: {m.group(1)}"
+
+    # Compilation error
+    if "failed with exit status" in stderr.lower():
+        # Try to extract the package name from the build output
+        for line in stderr.split("\n"):
+            if "building wheel for" in line.lower():
+                return f"编译失败: {line.strip()}"
+
+    # Generic error — return last few lines of stderr
+    err_lines = [l for l in stderr.split("\n") if l.strip()]
+    if err_lines:
+        return err_lines[-1][:200]
+
+    return "安装失败"
+
+
+async def install_requirements(requirements: list[str]) -> InstallResult:
+    """Install unsatisfied requirements.
+
+    Uses uv pip install (preferred) or pip install (fallback).
     Installs packages one by one so that a single failure does not
     prevent other packages from being installed.
-    Uses asyncio Lock to prevent concurrent pip processes.
+    Uses asyncio Lock to prevent concurrent install processes.
     """
     if not requirements:
         return InstallResult(success=True)
@@ -167,28 +234,47 @@ async def install_requirements(requirements: list[str]) -> InstallResult:
 
     installed_pkgs: list[str] = []
     failed_pkgs: list[str] = []
+    errors: dict[str, str] = {}
     all_output: list[str] = []
 
     async with _install_lock:
         install_cmd = _get_install_command()
         for spec in to_install:
             cmd = [*install_cmd, spec]
-            result = await run_command(cmd, timeout=120)
+            result = await run_command(cmd, timeout=_INSTALL_TIMEOUT)
             all_output.append(f"--- {' '.join(install_cmd)} {spec} ---")
             all_output.append(result.stdout)
-            all_output.append(result.stderr)
+            if result.stderr:
+                all_output.append(result.stderr)
 
-            # Check if this specific package was installed
-            post_check = check_requirements([spec])
-            for s in post_check.requirements:
-                if s.satisfied:
-                    installed_pkgs.append(s.name)
-                else:
-                    failed_pkgs.append(s.name)
+            # Invalidate metadata cache so newly installed packages are visible
+            _invalidate_metadata_cache()
+
+            # Determine install result:
+            # 1. If command succeeded, verify with check_requirements()
+            # 2. If command failed, extract error message
+            if result.ok:
+                post_check = check_requirements([spec])
+                for s in post_check.requirements:
+                    if s.satisfied:
+                        installed_pkgs.append(s.name)
+                    else:
+                        # Command returned 0 but package still not satisfied
+                        failed_pkgs.append(s.name)
+                        errors[s.name] = "安装命令成功但包仍不可用"
+            else:
+                # Extract package name for error reporting
+                try:
+                    pkg_name = normalize_package_name(Requirement(spec).name)
+                except Exception:
+                    pkg_name = spec
+                failed_pkgs.append(pkg_name)
+                errors[pkg_name] = _extract_error_message(result)
 
     return InstallResult(
         success=len(failed_pkgs) == 0,
         installed=installed_pkgs,
         failed=failed_pkgs,
         output="\n".join(all_output),
+        errors=errors,
     )

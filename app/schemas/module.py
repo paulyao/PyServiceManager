@@ -97,6 +97,7 @@ class PkgStatusItem(BaseModel):
     installed: bool
     installed_version: str | None
     satisfied: bool
+    error: str | None = None
 
 
 class DepsCheckResponse(BaseModel):
@@ -109,6 +110,7 @@ class DepsInstallResponse(BaseModel):
     success: bool
     installed: list[str]
     failed: list[str]
+    errors: dict[str, str] = {}
     output: str
 
 

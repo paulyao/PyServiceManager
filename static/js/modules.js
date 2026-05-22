@@ -465,7 +465,16 @@ async function installModuleDeps(name) {
         if (result.success) {
             showToast(`已安装 ${result.installed.length} 个依赖`);
         } else {
-            showToast(`安装失败: ${result.failed.join(', ')}`, 'error');
+            let msg = '安装失败: ';
+            const failedDetails = result.failed.map(pkg => {
+                const err = result.errors && result.errors[pkg];
+                return err ? `${pkg} (${err})` : pkg;
+            });
+            msg += failedDetails.join(', ');
+            if (result.installed && result.installed.length > 0) {
+                msg += ` (已成功安装: ${result.installed.join(', ')})`;
+            }
+            showToast(msg, 'error', 8000);
         }
         // Re-check after install
         await checkModuleDeps(name);

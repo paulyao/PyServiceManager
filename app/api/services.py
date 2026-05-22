@@ -330,6 +330,7 @@ async def install_service_deps(name: str, session: AsyncSession = Depends(get_se
         installed=install_result.installed,
         failed=install_result.failed,
         output=install_result.output,
+        errors=install_result.errors,
     )
 
 

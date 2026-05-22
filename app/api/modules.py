@@ -233,6 +233,7 @@ async def install_module_deps(name: str, session: AsyncSession = Depends(get_ses
         installed=result.installed,
         failed=result.failed,
         output=result.output,
+        errors=result.errors,
     )
 
 
