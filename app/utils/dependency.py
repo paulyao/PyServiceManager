@@ -2,9 +2,11 @@
 import asyncio
 import json
 import re
+import shutil
 import sys
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version as get_version
+from pathlib import Path
 
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
@@ -13,6 +15,16 @@ from app.utils.system import run_command
 
 # Lock to prevent concurrent pip install processes
 _install_lock = asyncio.Lock()
+
+
+def _get_install_command() -> list[str]:
+    """Get the package install command prefix.
+
+    Uses 'uv pip install' when uv is available, falls back to 'pip install'.
+    """
+    if shutil.which("uv"):
+        return ["uv", "pip", "install"]
+    return [sys.executable, "-m", "pip", "install"]
 
 
 def normalize_package_name(name: str) -> str:
@@ -158,10 +170,11 @@ async def install_requirements(requirements: list[str]) -> InstallResult:
     all_output: list[str] = []
 
     async with _install_lock:
+        install_cmd = _get_install_command()
         for spec in to_install:
-            cmd = [sys.executable, "-m", "pip", "install", spec]
+            cmd = [*install_cmd, spec]
             result = await run_command(cmd, timeout=120)
-            all_output.append(f"--- pip install {spec} ---")
+            all_output.append(f"--- {' '.join(install_cmd)} {spec} ---")
             all_output.append(result.stdout)
             all_output.append(result.stderr)
 
