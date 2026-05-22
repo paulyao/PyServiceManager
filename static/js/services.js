@@ -384,7 +384,19 @@ async function renderServiceDetailPage(params) {
             <div class="tab-content" id="tab-logs">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                     <span style="font-size:14px;color:var(--text-secondary)">实时日志流</span>
-                    <div style="display:flex;gap:8px">
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:4px">
+                            显示
+                            <select id="log-line-count" class="form-select" style="width:auto;padding:2px 6px;font-size:12px" onchange="reloadServiceLogs()">
+                                <option value="50">50</option>
+                                <option value="100" selected>100</option>
+                                <option value="200">200</option>
+                                <option value="500">500</option>
+                                <option value="1000">1000</option>
+                            </select>
+                            行
+                        </label>
+                        <button class="btn btn-outline btn-sm" onclick="reloadServiceLogs()">刷新</button>
                         <button class="btn btn-outline btn-sm" onclick="clearLogViewer()">清空</button>
                         <button class="btn btn-outline btn-sm" id="btn-auto-scroll" onclick="toggleAutoScroll()">自动滚动: 开</button>
                     </div>
@@ -797,13 +809,19 @@ let autoScroll = true;
 
 async function loadServiceLogs(name) {
     try {
-        const data = await api.getServiceLogs(name, 200);
+        const lineCount = parseInt(document.getElementById('log-line-count')?.value) || 100;
+        const data = await api.getServiceLogs(name, lineCount);
         const viewer = document.getElementById('log-viewer');
         if (viewer && data.logs) {
             viewer.innerHTML = data.logs.map(l => `<div class="${getLogLevelClass(l)}">${escapeHtml(l)}</div>`).join('');
             if (autoScroll) viewer.scrollTop = viewer.scrollHeight;
         }
     } catch (e) { /* 忽略 */ }
+}
+
+function reloadServiceLogs() {
+    const name = window.location.hash.split('/')[1];
+    if (name) loadServiceLogs(name);
 }
 
 function connectLogWs(name) {
