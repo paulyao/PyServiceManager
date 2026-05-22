@@ -9,6 +9,8 @@
 - **TOML 配置热加载** — 修改配置后无需重启服务，通过 SIGHUP 信号实现配置热更新
 - **实时日志流** — WebSocket 驱动的实时日志查看器，支持历史日志回溯
 - **模块化扩展系统** — 编写或上传 Python 模块，在服务中勾选启用，支持生命周期钩子（on_start/on_stop/on_config_reload）和工具方法注入
+- **依赖管理** — 声明服务和模块的 pip 依赖（PEP 508 格式），实时检查安装状态与版本约束，一键安装缺失依赖
+- **代码扫描分析** — AST 分析服务脚本和模块源码中的 import 语句，自动发现第三方依赖，与声明依赖对比，一键添加遗漏的包
 - **模块复用** — 同一模块可绑定到多个服务，支持模块间共享状态
 - **配置文件监控** — Watchdog 自动检测配置文件变更并触发热加载
 - **响应式暗色主题界面** — 原生 HTML + JS，零构建步骤，移动端适配
@@ -113,6 +115,8 @@ PyServices/
 │   │   ├── service.py       # 服务 Pydantic 模型
 │   │   └── module.py        # 模块 Pydantic 模型
 │   └── utils/
+│       ├── dependency.py    # 依赖检查与安装
+│       ├── import_scanner.py # 代码扫描（AST 分析）
 │       ├── validation.py    # 输入验证
 │       └── system.py        # 系统工具函数
 ├── static/
@@ -231,6 +235,25 @@ def run(config, modules):
     result = modules["my-module"].my_utility()
 ```
 
+### 依赖管理
+
+服务和模块均支持声明 pip 依赖（PEP 508 格式），平台自动检查安装状态和版本约束。
+
+**声明依赖**：在服务详情页的「依赖」标签页中，每行填写一个依赖：
+
+```
+requests>=2.28
+pymysql>=1.1
+certifi
+```
+
+**检查依赖**：点击「检查所有依赖」，平台会：
+- 检查声明的依赖是否已安装且版本满足
+- AST 分析服务 main.py 和启用模块的 module.py 中的 import 语句
+- 对比声明与代码扫描结果，标记遗漏或过时的依赖
+
+**一键安装**：点击「一键安装缺失依赖」自动安装未满足的包。
+
 ## API 概览
 
 | 方法 | 路径 | 说明 |
@@ -249,6 +272,9 @@ def run(config, modules):
 | PUT | `/api/v1/services/{name}/config` | 更新服务配置（触发热加载） |
 | GET | `/api/v1/services/{name}/logs` | 获取历史日志 |
 | WS | `/api/v1/services/{name}/logs/ws` | 实时日志流 |
+| GET | `/api/v1/services/{name}/deps` | 检查服务依赖状态（?scan=true 启用代码扫描） |
+| POST | `/api/v1/services/{name}/deps/install` | 安装服务缺失依赖 |
+| PUT | `/api/v1/services/{name}/requirements` | 更新服务依赖声明 |
 | GET | `/api/v1/modules` | 列出所有模块 |
 | POST | `/api/v1/modules` | 创建模块 |
 | POST | `/api/v1/modules/validate` | 验证模块代码 |
@@ -259,6 +285,9 @@ def run(config, modules):
 | PUT | `/api/v1/modules/{name}/code` | 更新模块代码 |
 | GET | `/api/v1/modules/service/{name}` | 获取服务的模块绑定 |
 | PUT | `/api/v1/modules/service/{name}` | 更新服务的模块绑定 |
+| GET | `/api/v1/modules/{name}/deps` | 检查模块依赖状态 |
+| POST | `/api/v1/modules/{name}/deps/install` | 安装模块缺失依赖 |
+| PUT | `/api/v1/modules/{name}/requirements` | 更新模块依赖声明 |
 
 ## 技术栈
 
@@ -271,6 +300,7 @@ def run(config, modules):
 | 模板引擎 | Jinja2 |
 | 文件监控 | Watchdog |
 | 配置格式 | TOML |
+| 依赖解析 | packaging (PEP 508) |
 | 前端 | 原生 HTML + CSS + JavaScript |
 | 服务管理 | systemd (Linux) / subprocess (macOS) |
 
