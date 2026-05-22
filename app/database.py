@@ -54,6 +54,13 @@ async def init_db():
             await conn.execute(text(
                 "ALTER TABLE services ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'"
             ))
+        # Migration: add remarks column to services table
+        result = await conn.execute(text("PRAGMA table_info(services)"))
+        columns = [row[1] for row in result.fetchall()]
+        if "remarks" not in columns:
+            await conn.execute(text(
+                "ALTER TABLE services ADD COLUMN remarks TEXT DEFAULT NULL"
+            ))
 
 
 async def get_session() -> AsyncSession:

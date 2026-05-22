@@ -60,6 +60,50 @@ async def get_service(name: str, session: AsyncSession = Depends(get_session)):
     return service
 
 
+@router.put("/{name}", response_model=ServiceResponse)
+async def update_service(name: str, data: ServiceUpdate, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Service).where(Service.name == name))
+    service = result.scalar_one_or_none()
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+
+    # Handle enabled field specially — it controls system service auto-start
+    enabled_change = update_data.pop("enabled", None)
+    if enabled_change is not None and enabled_change != service.enabled:
+        try:
+            if enabled_change:
+                await service_manager.enable(session, name)
+            else:
+                await service_manager.disable(session, name)
+            # Re-fetch after enable/disable (they commit and refresh)
+            result = await session.execute(select(Service).where(Service.name == name))
+            service = result.scalar_one()
+        except ServiceNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+        except ServiceManagerError as e:
+            detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
+            raise HTTPException(status_code=500, detail=detail_msg)
+
+    # Apply remaining field updates
+    if update_data:
+        for key, value in update_data.items():
+            if key == "requirements" and isinstance(value, list):
+                service.requirements_list = value
+            else:
+                setattr(service, key, value)
+        service.updated_at = datetime.now()
+        try:
+            await session.commit()
+            await session.refresh(service)
+        except Exception as e:
+            await session.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    return service
+
+
 @router.delete("/{name}", status_code=204)
 async def delete_service(name: str, session: AsyncSession = Depends(get_session)):
     try:
@@ -296,7 +340,6 @@ async def check_service_deps(name: str, scan: bool = False, session: AsyncSessio
     When scan=true, also analyzes source code imports via AST scanning.
     """
     return await _get_service_deps_data(name, session, scan=scan)
-    return await _get_service_deps_data(name, session)
 
 
 @router.post("/{name}/deps/install", response_model=DepsInstallResponse)

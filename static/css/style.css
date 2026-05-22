@@ -419,6 +419,45 @@ body {
 .info-label { color: var(--text-secondary); min-width: 120px; }
 .info-value { font-weight: 500; }
 
+/* Info form layout */
+.info-form {
+    display: flex;
+    gap: 32px;
+}
+.info-form-section {
+    flex: 1;
+    min-width: 0;
+}
+.info-form-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--primary);
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+.info-editable-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.info-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.info-field .info-label {
+    min-width: unset;
+    font-size: 13px;
+}
+.info-field .form-textarea {
+    min-height: 40px;
+    resize: vertical;
+}
+.info-field .toggle {
+    align-self: flex-start;
+}
+
 /* Validation panel */
 .validation-panel {
     background: var(--bg-input);

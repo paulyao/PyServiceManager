@@ -30,6 +30,7 @@ const api = {
     listServices: () => request('GET', '/services'),
     getService: (name) => request('GET', `/services/${name}`),
     createService: (data) => request('POST', '/services', data),
+    updateService: (name, data) => request('PUT', `/services/${name}`, data),
     deleteService: (name) => request('DELETE', `/services/${name}`),
     startService: (name) => request('POST', `/services/${name}/start`),
     stopService: (name) => request('POST', `/services/${name}/stop`),

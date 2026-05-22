@@ -291,15 +291,42 @@ async function renderServiceDetailPage(params) {
             </div>
 
             <div class="tab-content active" id="tab-info">
-                <ul class="info-list">
-                    <li><span class="info-label">名称</span><span class="info-value">${escapeHtml(service.name)}</span></li>
-                    <li><span class="info-label">状态</span><span class="info-value">${statusText}</span></li>
-                    <li><span class="info-label">自动重启</span><span class="info-value">${service.auto_restart ? '是' : '否'}</span></li>
-                    <li><span class="info-label">Python 路径</span><span class="info-value">${escapeHtml(service.python_path)}</span></li>
-                    <li><span class="info-label">代码来源</span><span class="info-value">${service.code_source === 'editor' ? '在线编辑' : service.code_source === 'upload' ? '上传文件' : service.code_source}</span></li>
-                    <li><span class="info-label">创建时间</span><span class="info-value">${new Date(service.created_at).toLocaleString()}</span></li>
-                    <li><span class="info-label">更新时间</span><span class="info-value">${new Date(service.updated_at).toLocaleString()}</span></li>
-                </ul>
+                <div class="info-form">
+                    <div class="info-form-section">
+                        <div class="info-form-title">基本属性</div>
+                        <ul class="info-list">
+                            <li><span class="info-label">名称</span><span class="info-value">${escapeHtml(service.name)}</span></li>
+                            <li><span class="info-label">状态</span><span class="info-value">${statusText}</span></li>
+                            <li><span class="info-label">Python 路径</span><span class="info-value">${escapeHtml(service.python_path)}</span></li>
+                            <li><span class="info-label">代码来源</span><span class="info-value">${service.code_source === 'editor' ? '在线编辑' : service.code_source === 'upload' ? '上传文件' : service.code_source}</span></li>
+                            <li><span class="info-label">创建时间</span><span class="info-value">${new Date(service.created_at).toLocaleString()}</span></li>
+                            <li><span class="info-label">更新时间</span><span class="info-value">${new Date(service.updated_at).toLocaleString()}</span></li>
+                        </ul>
+                    </div>
+                    <div class="info-form-section">
+                        <div class="info-form-title">可编辑属性</div>
+                        <div class="info-editable-fields">
+                            <div class="info-field">
+                                <label class="info-label">随系统启动</label>
+                                <label class="toggle">
+                                    <input type="checkbox" id="svc-edit-enabled" ${service.enabled ? 'checked' : ''}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="info-field">
+                                <label class="info-label" for="svc-edit-description">服务描述</label>
+                                <textarea class="form-textarea" id="svc-edit-description" rows="2" placeholder="描述该服务的功能">${escapeHtml(service.description || '')}</textarea>
+                            </div>
+                            <div class="info-field">
+                                <label class="info-label" for="svc-edit-remarks">备注</label>
+                                <textarea class="form-textarea" id="svc-edit-remarks" rows="3" placeholder="备注信息">${escapeHtml(service.remarks || '')}</textarea>
+                            </div>
+                            <div style="margin-top:12px">
+                                <button class="btn btn-primary btn-sm" onclick="saveServiceInfo('${name}')">保存</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="tab-content" id="tab-code">
@@ -655,6 +682,22 @@ async function saveServiceRequirements(name) {
 }
 
 // ── 服务详情操作 ───────────────────────────────────
+async function saveServiceInfo(name) {
+    const enabled = document.getElementById('svc-edit-enabled').checked;
+    const description = document.getElementById('svc-edit-description').value.trim();
+    const remarks = document.getElementById('svc-edit-remarks').value.trim();
+
+    try {
+        await api.updateService(name, {
+            enabled,
+            description: description || null,
+            remarks: remarks || null,
+        });
+        showToast('属性已保存');
+        renderServiceDetailPage({name});
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
 async function startServiceDetail(name) {
     try { await api.startService(name); showToast('服务已启动'); renderServiceDetailPage({name}); }
     catch (e) { showToast(e.message, 'error'); }

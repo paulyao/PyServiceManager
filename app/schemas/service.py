@@ -20,7 +20,9 @@ class ServiceCreate(BaseModel):
 class ServiceUpdate(BaseModel):
     display_name: str | None = None
     description: str | None = None
+    enabled: bool | None = None
     auto_restart: bool | None = None
+    remarks: str | None = None
     python_path: str | None = None
     requirements: list[str] | None = None
 
@@ -34,6 +36,7 @@ class ServiceResponse(BaseModel):
     status: str
     enabled: bool
     auto_restart: bool
+    remarks: str | None
     python_path: str
     requirements: list[str] = Field(default_factory=list)
     created_at: datetime

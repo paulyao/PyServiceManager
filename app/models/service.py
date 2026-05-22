@@ -21,6 +21,7 @@ class Service(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="stopped")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     auto_restart: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     python_path: Mapped[str] = mapped_column(String(256), nullable=False, default="auto")
     working_dir: Mapped[str] = mapped_column(Text, nullable=False)
     requirements: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
