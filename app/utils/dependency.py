@@ -124,6 +124,8 @@ def check_requirements(requirements: list[str]) -> CheckResult:
 async def install_requirements(requirements: list[str]) -> InstallResult:
     """Install unsatisfied requirements via pip.
 
+    Installs packages one by one so that a single failure does not
+    prevent other packages from being installed.
     Uses asyncio Lock to prevent concurrent pip processes.
     """
     if not requirements:
@@ -151,24 +153,29 @@ async def install_requirements(requirements: list[str]) -> InstallResult:
     if not to_install:
         return InstallResult(success=True, output="所有依赖已满足，无需安装")
 
-    async with _install_lock:
-        cmd = [sys.executable, "-m", "pip", "install", *to_install]
-        result = await run_command(cmd, timeout=120)
+    installed_pkgs: list[str] = []
+    failed_pkgs: list[str] = []
+    all_output: list[str] = []
 
-    if result.ok:
-        # Re-check after installation
-        post_check = check_requirements(to_install)
-        installed_pkgs = [s.name for s in post_check.requirements if s.satisfied]
-        failed_pkgs = [s.name for s in post_check.requirements if not s.satisfied]
-        return InstallResult(
-            success=len(failed_pkgs) == 0,
-            installed=installed_pkgs,
-            failed=failed_pkgs,
-            output=result.stdout + "\n" + result.stderr,
-        )
-    else:
-        return InstallResult(
-            success=False,
-            failed=unsatisfied_names,
-            output=result.stdout + "\n" + result.stderr,
-        )
+    async with _install_lock:
+        for spec in to_install:
+            cmd = [sys.executable, "-m", "pip", "install", spec]
+            result = await run_command(cmd, timeout=120)
+            all_output.append(f"--- pip install {spec} ---")
+            all_output.append(result.stdout)
+            all_output.append(result.stderr)
+
+            # Check if this specific package was installed
+            post_check = check_requirements([spec])
+            for s in post_check.requirements:
+                if s.satisfied:
+                    installed_pkgs.append(s.name)
+                else:
+                    failed_pkgs.append(s.name)
+
+    return InstallResult(
+        success=len(failed_pkgs) == 0,
+        installed=installed_pkgs,
+        failed=failed_pkgs,
+        output="\n".join(all_output),
+    )
