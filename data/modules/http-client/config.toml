@@ -1,8 +1,0 @@
-# HTTP Client module configuration
-# This module is stateless - request parameters are provided by the caller.
-# This config file serves as documentation and default reference only.
-
-[defaults]
-# 默认配置（仅作参考，实际参数在调用时由调用者提供）
-timeout = 30
-user_agent = "PyService-HttpClient/1.0"
