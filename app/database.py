@@ -33,6 +33,27 @@ async def init_db():
         await conn.execute(text(
             "UPDATE modules SET builtin_source = name WHERE is_builtin = 1 AND builtin_source IS NULL"
         ))
+        # Migration: add requirements column to modules table
+        result = await conn.execute(text("PRAGMA table_info(modules)"))
+        columns = [row[1] for row in result.fetchall()]
+        if "requirements" not in columns:
+            await conn.execute(text(
+                "ALTER TABLE modules ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'"
+            ))
+        # Pre-populate requirements for built-in modules
+        await conn.execute(text(
+            "UPDATE modules SET requirements = '[\"pymysql>=1.1\"]' WHERE name = 'mysql-helper' AND requirements = '[]'"
+        ))
+        await conn.execute(text(
+            "UPDATE modules SET requirements = '[\"certifi\"]' WHERE name = 'http-client' AND requirements = '[]'"
+        ))
+        # Migration: add requirements column to services table
+        result = await conn.execute(text("PRAGMA table_info(services)"))
+        columns = [row[1] for row in result.fetchall()]
+        if "requirements" not in columns:
+            await conn.execute(text(
+                "ALTER TABLE services ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'"
+            ))
 
 
 async def get_session() -> AsyncSession:

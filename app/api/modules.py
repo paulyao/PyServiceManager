@@ -10,9 +10,11 @@ from app.schemas.module import (
     ModuleCreate, ModuleUpdate, ModuleResponse, ModuleCodeUpdate,
     ModuleValidateRequest, ModuleValidateResponse,
     ServiceModulesUpdate, ServiceModulesResponse, ServiceModuleItem,
+    PkgStatusItem, DepsCheckResponse, DepsInstallResponse, RequirementsUpdate,
 )
 from app.core.module_manager import ModuleManager, ModuleNotFoundError, ModuleManagerError, BuiltinModuleError
-from app.utils.validation import validate_module_code
+from app.utils.validation import validate_module_code, validate_requirements
+from app.utils.dependency import check_requirements, install_requirements
 
 router = APIRouter(prefix="/modules", tags=["modules"])
 module_manager = ModuleManager()
@@ -197,3 +199,65 @@ async def get_module_services(name: str, session: AsyncSession = Depends(get_ses
         }
     except ModuleNotFoundError:
         raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
+
+
+# ── Dependency Management ──────────────────────────────────────
+
+@router.get("/{name}/deps", response_model=DepsCheckResponse)
+async def check_module_deps(name: str, session: AsyncSession = Depends(get_session)):
+    """Check if module dependencies are installed."""
+    try:
+        module = await module_manager.get(session, name)
+    except ModuleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
+
+    result = check_requirements(module.requirements_list)
+    return DepsCheckResponse(
+        requirements=[PkgStatusItem(**vars(s)) for s in result.requirements],
+        all_satisfied=result.all_satisfied,
+        missing_count=len(result.missing) + len(result.unsatisfied),
+    )
+
+
+@router.post("/{name}/deps/install", response_model=DepsInstallResponse)
+async def install_module_deps(name: str, session: AsyncSession = Depends(get_session)):
+    """Install missing module dependencies."""
+    try:
+        module = await module_manager.get(session, name)
+    except ModuleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
+
+    result = await install_requirements(module.requirements_list)
+    return DepsInstallResponse(
+        success=result.success,
+        installed=result.installed,
+        failed=result.failed,
+        output=result.output,
+    )
+
+
+@router.put("/{name}/requirements", response_model=ModuleResponse)
+async def update_module_requirements(name: str, data: RequirementsUpdate, session: AsyncSession = Depends(get_session)):
+    """Update module dependency declarations."""
+    try:
+        module = await module_manager.get(session, name)
+    except ModuleNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Module '{name}' not found")
+
+    # Validate requirement specs
+    errors = validate_requirements(data.requirements)
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    module.requirements_list = data.requirements
+    module.updated_at = __import__("datetime").datetime.now()
+    try:
+        await session.commit()
+        await session.refresh(module)
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    resp = ModuleResponse.model_validate(module)
+    resp.service_count = await module_manager.get_service_count(session, module.id)
+    return resp

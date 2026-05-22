@@ -1,4 +1,5 @@
 """Service ORM model."""
+import json
 from datetime import datetime
 from sqlalchemy import String, Boolean, Integer, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
@@ -22,6 +23,15 @@ class Service(Base):
     auto_restart: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     python_path: Mapped[str] = mapped_column(String(256), nullable=False, default="auto")
     working_dir: Mapped[str] = mapped_column(Text, nullable=False)
+    requirements: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    @property
+    def requirements_list(self) -> list[str]:
+        return json.loads(self.requirements)
+
+    @requirements_list.setter
+    def requirements_list(self, value: list[str]):
+        self.requirements = json.dumps(value)

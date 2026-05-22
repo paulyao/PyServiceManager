@@ -286,6 +286,7 @@ async function renderServiceDetailPage(params) {
                 <div class="tab" data-tab="code" onclick="switchTab(this)">代码</div>
                 <div class="tab" data-tab="config" onclick="switchTab(this)">配置</div>
                 <div class="tab" data-tab="modules" onclick="switchTab(this)">模块</div>
+                <div class="tab" data-tab="deps" onclick="switchTab(this)">依赖</div>
                 <div class="tab" data-tab="logs" onclick="switchTab(this)">日志</div>
             </div>
 
@@ -363,6 +364,24 @@ async function renderServiceDetailPage(params) {
                 </div>
                 <div id="log-viewer" class="log-viewer"></div>
             </div>
+
+            <div class="tab-content" id="tab-deps">
+                <div class="dep-section">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                        <div style="font-size:14px;color:var(--text-secondary)">服务自身依赖声明</div>
+                        <div style="display:flex;gap:8px">
+                            <button class="btn btn-primary btn-sm" onclick="saveServiceRequirements('${name}')">保存</button>
+                        </div>
+                    </div>
+                    <textarea class="form-textarea" id="svc-requirements" rows="3" placeholder="每行一个依赖，如 requests>=2.28">${escapeHtml((service.requirements || []).join('\n'))}</textarea>
+                </div>
+                <div id="svc-deps-module-section" style="margin-top:20px"></div>
+                <div id="svc-deps-summary" style="margin-top:16px"></div>
+                <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
+                    <button class="btn btn-outline" onclick="loadServiceDeps('${name}')">检查所有依赖</button>
+                    <button class="btn btn-primary" id="btn-install-svc-deps" onclick="installServiceDeps('${name}')">一键安装缺失依赖</button>
+                </div>
+            </div>
         `;
 
         // 初始化 CodeMirror 编辑器
@@ -407,6 +426,87 @@ function switchTab(el) {
         const name = window.location.hash.split('/')[1];
         if (name) connectLogWs(name);
     }
+
+    // 切换到依赖标签时自动加载依赖状态
+    if (tabName === 'deps') {
+        const name = window.location.hash.split('/')[1];
+        if (name) loadServiceDeps(name);
+    }
+}
+
+// ── 依赖管理 ─────────────────────────────────────────
+
+async function loadServiceDeps(name) {
+    try {
+        const result = await api.getServiceDeps(name);
+        const modSection = document.getElementById('svc-deps-module-section');
+        const summary = document.getElementById('svc-deps-summary');
+
+        // Render module deps
+        let modHtml = '';
+        if (result.module_requirements && result.module_requirements.length > 0) {
+            modHtml = result.module_requirements.map(mod => {
+                const modAllOk = mod.requirements.every(r => r.satisfied);
+                return `
+                    <div class="dep-module-group">
+                        <div class="dep-module-header">
+                            <span style="font-weight:500">${escapeHtml(mod.module_display_name)}</span>
+                            <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(mod.module_name)}</span>
+                            ${modAllOk ? '<span class="dep-status-badge dep-satisfied">✓ 全部满足</span>' : '<span class="dep-status-badge dep-missing">✗ 有缺失</span>'}
+                        </div>
+                        ${_renderDepsStatusItems(mod.requirements)}
+                    </div>
+                `;
+            }).join('');
+        } else {
+            modHtml = '<div style="color:var(--text-muted);font-size:13px">无已启用模块依赖</div>';
+        }
+        if (modSection) modSection.innerHTML = `
+            <div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px">模块依赖</div>
+            ${modHtml}
+        `;
+
+        // Render summary
+        const svcCount = result.service_requirements ? result.service_requirements.length : 0;
+        const totalCount = result.all_requirements ? result.all_requirements.length : 0;
+        const satisfiedCount = result.all_requirements ? result.all_requirements.filter(r => r.satisfied).length : 0;
+        if (summary) summary.innerHTML = `
+            <div class="dep-summary">
+                <div style="display:flex;gap:24px;justify-content:center;font-size:14px">
+                    <div><strong>${totalCount}</strong> 总依赖</div>
+                    <div style="color:var(--success)"><strong>${satisfiedCount}</strong> 已满足</div>
+                    <div style="color:${result.all_satisfied ? 'var(--success)' : 'var(--danger)'}"><strong>${result.missing_count}</strong> ${result.all_satisfied ? '缺失' : '未满足'}</div>
+                </div>
+                ${result.all_satisfied ? '<div style="text-align:center;margin-top:8px;color:var(--success);font-size:13px">✓ 所有依赖已满足，服务可正常运行</div>' : ''}
+            </div>
+        `;
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function installServiceDeps(name) {
+    const btn = document.getElementById('btn-install-svc-deps');
+    if (btn) { btn.disabled = true; btn.textContent = '安装中...'; }
+    try {
+        const result = await api.installServiceDeps(name);
+        if (result.success) {
+            showToast(`已安装 ${result.installed.length} 个依赖`);
+        } else {
+            showToast(`安装失败: ${result.failed.join(', ')}`, 'error');
+        }
+        await loadServiceDeps(name);
+    } catch (e) { showToast(e.message, 'error'); }
+    if (btn) { btn.disabled = false; btn.textContent = '一键安装缺失依赖'; }
+}
+
+async function saveServiceRequirements(name) {
+    const textarea = document.getElementById('svc-requirements');
+    if (!textarea) return;
+    const reqs = textarea.value.split('\n').map(r => r.trim()).filter(r => r.length > 0);
+    try {
+        await api.updateServiceRequirements(name, reqs);
+        showToast('依赖声明已保存');
+        await loadServiceDeps(name);
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 // ── 服务详情操作 ───────────────────────────────────

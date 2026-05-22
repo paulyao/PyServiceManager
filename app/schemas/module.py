@@ -1,7 +1,8 @@
 """Module Pydantic schemas."""
+import json
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ModuleCreate(BaseModel):
@@ -13,6 +14,7 @@ class ModuleCreate(BaseModel):
     code: str | None = None
     config_toml: str | None = None
     code_source: str = Field("editor", pattern=r"^(editor|upload)$")
+    requirements: list[str] = Field(default_factory=list, description="Pip package requirements")
 
 
 class ModuleUpdate(BaseModel):
@@ -21,6 +23,7 @@ class ModuleUpdate(BaseModel):
     description: str | None = None
     version: str | None = None
     author: str | None = None
+    requirements: list[str] | None = None
 
 
 class ModuleCodeUpdate(BaseModel):
@@ -37,11 +40,19 @@ class ModuleResponse(BaseModel):
     author: str | None
     code_source: str
     is_builtin: bool = False
+    requirements: list[str] = Field(default_factory=list)
     service_count: int = 0
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("requirements", mode="before")
+    @classmethod
+    def parse_requirements(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
 
 
 class ModuleCodeResponse(BaseModel):
@@ -76,3 +87,30 @@ class ServiceModulesUpdate(BaseModel):
 class ServiceModulesResponse(BaseModel):
     modules: list[ServiceModuleItem]
     restart_required: bool = False
+
+
+# ── Dependency schemas ────────────────────────────────
+
+class PkgStatusItem(BaseModel):
+    name: str
+    specifier: str
+    installed: bool
+    installed_version: str | None
+    satisfied: bool
+
+
+class DepsCheckResponse(BaseModel):
+    requirements: list[PkgStatusItem]
+    all_satisfied: bool
+    missing_count: int
+
+
+class DepsInstallResponse(BaseModel):
+    success: bool
+    installed: list[str]
+    failed: list[str]
+    output: str
+
+
+class RequirementsUpdate(BaseModel):
+    requirements: list[str]

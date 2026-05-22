@@ -1,4 +1,5 @@
 """Module ORM model."""
+import json
 from datetime import datetime
 from sqlalchemy import String, Integer, Text, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
@@ -20,5 +21,14 @@ class Module(Base):
     config_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     builtin_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requirements: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+    @property
+    def requirements_list(self) -> list[str]:
+        return json.loads(self.requirements)
+
+    @requirements_list.setter
+    def requirements_list(self, value: list[str]):
+        self.requirements = json.dumps(value)

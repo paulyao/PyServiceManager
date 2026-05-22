@@ -34,6 +34,11 @@ class BuiltinModuleError(ModuleManagerError):
 class ModuleManager:
     """Manages module CRUD, file operations, and service bindings."""
 
+    BUILTIN_REQUIREMENTS: dict[str, list[str]] = {
+        "mysql-helper": ["pymysql>=1.1"],
+        "http-client": ["certifi"],
+    }
+
     async def ensure_builtin_modules(self, session: AsyncSession) -> list[str]:
         """Ensure all built-in modules from builtin_modules/ are registered.
         Returns list of newly created module names."""
@@ -96,6 +101,7 @@ class ModuleManager:
                 config_path=str(target_config) if target_config else None,
                 is_builtin=True,
                 builtin_source=name,
+                requirements=json.dumps(self.BUILTIN_REQUIREMENTS.get(name, [])),
             )
             session.add(module)
             created.append(name)

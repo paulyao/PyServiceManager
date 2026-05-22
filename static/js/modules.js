@@ -31,6 +31,9 @@ async function renderModulesPage() {
 function renderModuleCard(m) {
     const builtinBadge = m.is_builtin ? '<span class="badge badge-info">内置</span>' : '';
     const deleteBtn = m.is_builtin ? '' : `<button class="btn btn-outline btn-sm btn-icon" onclick="deleteModule('${m.name}')" title="删除">🗑️</button>`;
+    const depBadge = m.requirements && m.requirements.length > 0
+        ? `<span class="dep-badge dep-badge-unknown" data-module-deps="${m.name}">📦 ${m.requirements.length} 个依赖</span>`
+        : '';
     return `
         <div class="card" data-module="${m.name}">
             <div class="module-card-header">
@@ -41,6 +44,7 @@ function renderModuleCard(m) {
             <div class="module-desc">${escapeHtml(m.description || '暂无描述')}</div>
             <div class="module-meta">
                 <span>🔗 ${m.service_count} 个服务</span>
+                ${depBadge}
                 <span>${m.is_builtin ? '内置模块' : m.code_source === 'editor' ? '在线编辑' : m.code_source === 'upload' ? '上传文件' : m.code_source}</span>
             </div>
             <div style="margin-top:12px;display:flex;gap:8px">
@@ -373,7 +377,7 @@ async function openModuleSettingsModal(name) {
         const m = await api.getModule(name);
         const overlay = document.getElementById('modal-overlay');
         overlay.innerHTML = `
-            <div class="modal" style="max-width:480px">
+            <div class="modal" style="max-width:560px">
                 <div class="modal-header">
                     <span class="modal-title">模块设置: ${escapeHtml(m.display_name)}</span>
                     <button class="modal-close" onclick="closeModal()">&times;</button>
@@ -395,6 +399,16 @@ async function openModuleSettingsModal(name) {
                     <label class="form-label">版本</label>
                     <input class="form-input" id="mod-set-version" value="${escapeHtml(m.version)}">
                 </div>
+                <div class="form-group">
+                    <label class="form-label">依赖声明</label>
+                    <textarea class="form-textarea" id="mod-set-requirements" rows="3" placeholder="每行一个依赖，如 pymysql>=1.1">${escapeHtml((m.requirements || []).join('\n'))}</textarea>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">每行一个 pip 依赖声明（支持版本约束，如 pymysql>=1.1）</div>
+                    <div id="mod-deps-result" style="margin-top:8px"></div>
+                    <div style="margin-top:8px;display:flex;gap:8px">
+                        <button class="btn btn-outline btn-sm" onclick="checkModuleDeps('${m.name}')">检查依赖</button>
+                        <button class="btn btn-primary btn-sm" id="btn-install-mod-deps" onclick="installModuleDeps('${m.name}')">安装缺失依赖</button>
+                    </div>
+                </div>
                 <div class="modal-footer">
                     <button class="btn btn-outline" onclick="closeModal()">取消</button>
                     <button class="btn btn-primary" onclick="saveModuleSettings('${m.name}')">保存</button>
@@ -405,6 +419,58 @@ async function openModuleSettingsModal(name) {
     } catch (e) {
         showToast(e.message, 'error');
     }
+}
+
+function _parseRequirements() {
+    const textarea = document.getElementById('mod-set-requirements');
+    if (!textarea) return [];
+    return textarea.value.split('\n').map(r => r.trim()).filter(r => r.length > 0);
+}
+
+function _renderDepsStatusItems(requirements) {
+    if (!requirements || requirements.length === 0) return '<div style="color:var(--text-muted);font-size:12px">无依赖声明</div>';
+    return requirements.map(r => {
+        const statusClass = r.satisfied ? 'dep-satisfied' : r.installed ? 'dep-unsatisfied' : 'dep-missing';
+        const statusText = r.satisfied ? '已满足' : r.installed ? `版本不满足 (已装: ${r.installed_version || '?'})` : '未安装';
+        const specDisplay = r.specifier ? ` ${r.specifier}` : '';
+        return `<div class="dep-status-item"><span class="dep-name">${escapeHtml(r.name)}${specDisplay}</span><span class="dep-status-badge ${statusClass}">${statusText}</span></div>`;
+    }).join('');
+}
+
+async function checkModuleDeps(name) {
+    try {
+        // First save requirements to DB
+        const reqs = _parseRequirements();
+        await api.updateModuleRequirements(name, reqs);
+
+        const result = await api.getModuleDeps(name);
+        const panel = document.getElementById('mod-deps-result');
+        if (!panel) return;
+        panel.innerHTML = `
+            <div class="dep-section">
+                <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px">
+                    ${result.all_satisfied ? '<span style="color:var(--success)">✓ 所有依赖已满足</span>' : `<span style="color:var(--danger)">✗ ${result.missing_count} 个依赖未满足</span>`}
+                </div>
+                ${_renderDepsStatusItems(result.requirements)}
+            </div>
+        `;
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function installModuleDeps(name) {
+    const btn = document.getElementById('btn-install-mod-deps');
+    if (btn) { btn.disabled = true; btn.textContent = '安装中...'; }
+    try {
+        const result = await api.installModuleDeps(name);
+        if (result.success) {
+            showToast(`已安装 ${result.installed.length} 个依赖`);
+        } else {
+            showToast(`安装失败: ${result.failed.join(', ')}`, 'error');
+        }
+        // Re-check after install
+        await checkModuleDeps(name);
+    } catch (e) { showToast(e.message, 'error'); }
+    if (btn) { btn.disabled = false; btn.textContent = '安装缺失依赖'; }
 }
 
 async function saveModuleSettings(name) {

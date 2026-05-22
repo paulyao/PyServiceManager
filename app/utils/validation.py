@@ -95,3 +95,15 @@ def validate_module_code(code: str) -> tuple[bool, list[str], dict | None]:
     module_info["public_methods"] = public_methods
 
     return True, [], module_info
+
+
+def validate_requirements(requirements: list[str]) -> list[str]:
+    """Validate a list of requirement specifier strings. Returns list of errors."""
+    from app.utils.dependency import validate_requirement_spec
+
+    errors = []
+    for i, spec in enumerate(requirements):
+        is_valid, err_msg = validate_requirement_spec(spec)
+        if not is_valid:
+            errors.append(f"依赖 #{i+1} '{spec}': {err_msg}")
+    return errors

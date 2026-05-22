@@ -1,14 +1,22 @@
 """Service management API routes."""
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.models.service import Service
+from app.models.module import Module
+from app.models.service_module import ServiceModule
 from app.schemas.service import (
-    ServiceCreate, ServiceUpdate, ServiceResponse, ServiceStatus, CodeUpdate, ConfigUpdate,
+    ServiceCreate, ServiceUpdate, ServiceResponse, ServiceStatus,
+    CodeUpdate, ConfigUpdate, ServiceDepsResponse, ModuleDepSource,
+    RequirementsUpdate,
 )
+from app.schemas.module import PkgStatusItem, DepsInstallResponse
 from app.core.service_manager import ServiceManager, ServiceNotFoundError, ServiceManagerError
+from app.utils.dependency import check_requirements, install_requirements
+from app.utils.validation import validate_requirements
 
 router = APIRouter(prefix="/services", tags=["services"])
 service_manager = ServiceManager()
@@ -167,3 +175,121 @@ async def upload_service_script(name: str, file: UploadFile = File(...), session
     except ServiceManagerError as e:
         detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
         raise HTTPException(status_code=400, detail=detail_msg)
+
+
+# ── Dependency Management ──────────────────────────────────────
+
+async def _get_service_deps_data(name: str, session: AsyncSession):
+    """Collect all dependency data for a service (self + enabled modules)."""
+    result = await session.execute(select(Service).where(Service.name == name))
+    service = result.scalar_one_or_none()
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Check service own requirements
+    svc_reqs = service.requirements_list
+    svc_check = check_requirements(svc_reqs)
+    svc_items = [PkgStatusItem(**vars(s)) for s in svc_check.requirements]
+
+    # Collect enabled module requirements
+    bindings_result = await session.execute(
+        select(ServiceModule).where(
+            ServiceModule.service_id == service.id,
+            ServiceModule.enabled == True,  # noqa: E712
+        )
+    )
+    bindings = bindings_result.scalars().all()
+
+    module_deps: list[ModuleDepSource] = []
+    all_specs: list[str] = list(svc_reqs)
+
+    for binding in bindings:
+        mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
+        mod = mod_result.scalar_one_or_none()
+        if mod and mod.requirements_list:
+            mod_reqs = mod.requirements_list
+            mod_check = check_requirements(mod_reqs)
+            mod_items = [PkgStatusItem(**vars(s)) for s in mod_check.requirements]
+            module_deps.append(ModuleDepSource(
+                module_name=mod.name,
+                module_display_name=mod.display_name,
+                requirements=mod_items,
+            ))
+            all_specs.extend(mod_reqs)
+
+    # Aggregate check (all requirements combined)
+    agg_check = check_requirements(all_specs)
+    agg_items = [PkgStatusItem(**vars(s)) for s in agg_check.requirements]
+
+    return ServiceDepsResponse(
+        service_requirements=svc_items,
+        module_requirements=module_deps,
+        all_requirements=agg_items,
+        all_satisfied=agg_check.all_satisfied,
+        missing_count=len(agg_check.missing) + len(agg_check.unsatisfied),
+    )
+
+
+@router.get("/{name}/deps", response_model=ServiceDepsResponse)
+async def check_service_deps(name: str, session: AsyncSession = Depends(get_session)):
+    """Get aggregated dependency status for a service (self + enabled modules)."""
+    return await _get_service_deps_data(name, session)
+
+
+@router.post("/{name}/deps/install", response_model=DepsInstallResponse)
+async def install_service_deps(name: str, session: AsyncSession = Depends(get_session)):
+    """Install all missing dependencies for a service (self + enabled modules)."""
+    result = await session.execute(select(Service).where(Service.name == name))
+    service = result.scalar_one_or_none()
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Collect all requirements
+    all_specs = list(service.requirements_list)
+
+    bindings_result = await session.execute(
+        select(ServiceModule).where(
+            ServiceModule.service_id == service.id,
+            ServiceModule.enabled == True,  # noqa: E712
+        )
+    )
+    bindings = bindings_result.scalars().all()
+
+    for binding in bindings:
+        mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
+        mod = mod_result.scalar_one_or_none()
+        if mod and mod.requirements_list:
+            all_specs.extend(mod.requirements_list)
+
+    install_result = await install_requirements(all_specs)
+    return DepsInstallResponse(
+        success=install_result.success,
+        installed=install_result.installed,
+        failed=install_result.failed,
+        output=install_result.output,
+    )
+
+
+@router.put("/{name}/requirements", response_model=ServiceResponse)
+async def update_service_requirements(name: str, data: RequirementsUpdate, session: AsyncSession = Depends(get_session)):
+    """Update service's own dependency declarations."""
+    result = await session.execute(select(Service).where(Service.name == name))
+    service = result.scalar_one_or_none()
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Validate requirement specs
+    errors = validate_requirements(data.requirements)
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    service.requirements_list = data.requirements
+    service.updated_at = datetime.now()
+    try:
+        await session.commit()
+        await session.refresh(service)
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    return service

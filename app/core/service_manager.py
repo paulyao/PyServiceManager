@@ -20,6 +20,7 @@ from app.models.service import Service
 from app.models.service_module import ServiceModule
 from app.utils.system import has_systemctl, systemctl, run_command, CommandResult, get_service_pid_from_file
 from app.utils.validation import validate_service_name, validate_python_code, validate_toml_content
+from app.utils.dependency import check_requirements
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +449,30 @@ class ServiceManager:
 
         # Fix stale module paths and rewrite .modules.json before starting
         await self._fix_stale_module_paths(session, service)
+
+        # Check dependencies (warning only, do not block startup)
+        all_specs = list(service.requirements_list)
+        bindings_result = await session.execute(
+            select(ServiceModule).where(
+                ServiceModule.service_id == service.id,
+                ServiceModule.enabled == True,  # noqa: E712
+            )
+        )
+        bindings = bindings_result.scalars().all()
+        for binding in bindings:
+            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
+            mod = mod_result.scalar_one_or_none()
+            if mod and mod.requirements_list:
+                all_specs.extend(mod.requirements_list)
+        if all_specs:
+            deps_check = check_requirements(all_specs)
+            if not deps_check.all_satisfied:
+                missing_names = deps_check.missing + deps_check.unsatisfied
+                logger.warning(
+                    "Service '%s' has unsatisfied dependencies: %s. "
+                    "Service may fail due to ImportError at runtime.",
+                    service.name, ", ".join(missing_names),
+                )
 
         status = await self._backend.start(service)
         service.status = status["active"] if status["active"] in ("active", "running") else "failed"

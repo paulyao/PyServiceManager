@@ -82,6 +82,16 @@ const api = {
     // Module services
     getModuleServices: (name) => request('GET', `/modules/${name}/services`),
 
+    // Module dependencies
+    getModuleDeps: (name) => request('GET', `/modules/${name}/deps`),
+    installModuleDeps: (name) => request('POST', `/modules/${name}/deps/install`),
+    updateModuleRequirements: (name, requirements) => request('PUT', `/modules/${name}/requirements`, { requirements }),
+
+    // Service dependencies
+    getServiceDeps: (name) => request('GET', `/services/${name}/deps`),
+    installServiceDeps: (name) => request('POST', `/services/${name}/deps/install`),
+    updateServiceRequirements: (name, requirements) => request('PUT', `/services/${name}/requirements`, { requirements }),
+
     // Health
     health: () => request('GET', '/health'),
 };
