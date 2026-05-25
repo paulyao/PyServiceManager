@@ -93,6 +93,7 @@ async function startService(name) {
 }
 
 async function stopService(name) {
+    if (!confirm(`确定要停止服务 '${name}' 吗？`)) return;
     try {
         await api.stopService(name);
         showToast(`服务 '${name}' 已停止`);
@@ -716,6 +717,7 @@ async function startServiceDetail(name) {
 }
 
 async function stopServiceDetail(name) {
+    if (!confirm(`确定要停止服务 '${name}' 吗？`)) return;
     try { await api.stopService(name); showToast('服务已停止'); renderServiceDetailPage({name}); }
     catch (e) { showToast(e.message, 'error'); }
 }
