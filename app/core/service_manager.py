@@ -633,7 +633,12 @@ class ServiceManager:
             expected_script = str(MODULES_DIR / mod.name / "module.py")
             expected_config = str(MODULES_DIR / mod.name / "config.toml")
 
-            if mod.script_path != expected_script and not Path(mod.script_path).exists():
+            # Use ModuleManager._resolve_path to check actual file existence
+            from app.core.module_manager import ModuleManager
+            resolved_script = ModuleManager._resolve_path(mod.script_path)
+            resolved_config = ModuleManager._resolve_path(mod.config_path) if mod.config_path else None
+
+            if mod.script_path != expected_script and not resolved_script.exists():
                 logger.warning(
                     "Module '%s' has stale script_path '%s', updating to '%s'",
                     mod.name, mod.script_path, expected_script,
@@ -641,7 +646,7 @@ class ServiceManager:
                 mod.script_path = expected_script
                 paths_updated = True
 
-            if mod.config_path and mod.config_path != expected_config and not Path(mod.config_path).exists():
+            if mod.config_path and mod.config_path != expected_config and resolved_config and not resolved_config.exists():
                 logger.warning(
                     "Module '%s' has stale config_path '%s', updating to '%s'",
                     mod.name, mod.config_path, expected_config,
@@ -651,8 +656,8 @@ class ServiceManager:
 
             registry.append({
                 "name": mod.name,
-                "script_path": mod.script_path,
-                "config_path": mod.config_path or "",
+                "script_path": str(ModuleManager._resolve_path(mod.script_path)),
+                "config_path": str(ModuleManager._resolve_path(mod.config_path)) if mod.config_path else "",
             })
 
         if paths_updated:

@@ -23,6 +23,7 @@ const routes = {
     'services': renderServicesPage,
     'services/:name': renderServiceDetailPage,
     'modules': renderModulesPage,
+    'backup': renderBackupPage,
 };
 
 let currentCleanup = null;

@@ -301,7 +301,8 @@ async def _get_service_deps_data(name: str, session: AsyncSession, scan: bool = 
             mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
             mod = mod_result.scalar_one_or_none()
             if mod and mod.script_path:
-                mod_path = Path(mod.script_path)
+                from app.core.module_manager import ModuleManager
+                mod_path = ModuleManager._resolve_path(mod.script_path)
                 mod_scan_result = scan_source_file(mod_path)
                 mod_scan_item = SourceScanResultItem(
                     file_path=mod_scan_result.file_path,

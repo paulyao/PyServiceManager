@@ -1,5 +1,6 @@
 """Module lifecycle management: CRUD, file management, service binding."""
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -8,12 +9,14 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import MODULES_DIR, SERVICES_DIR, BUILTIN_MODULES_DIR
+from app.config import MODULES_DIR, SERVICES_DIR, BUILTIN_MODULES_DIR, DATA_DIR
 from app.models.module import Module
 from app.models.service import Service
 from app.models.service_module import ServiceModule
 from app.utils.validation import validate_service_name, validate_python_code, validate_toml_content, validate_module_code
 from app.core.module_loader import get_module_template
+
+logger = logging.getLogger(__name__)
 
 
 class ModuleManagerError(Exception):
@@ -38,6 +41,25 @@ class ModuleManager:
         "mysql-helper": ["pymysql>=1.1"],
         "http-client": ["certifi"],
     }
+
+    @staticmethod
+    def _relative_path(abs_path: Path | str) -> str:
+        """Convert absolute path to relative path from DATA_DIR parent."""
+        p = Path(abs_path)
+        try:
+            return str(p.relative_to(DATA_DIR.parent))
+        except ValueError:
+            # If path is already relative or not under DATA_DIR, store as-is
+            return str(p)
+
+    @staticmethod
+    def _resolve_path(stored_path: str) -> Path:
+        """Resolve a stored path (relative or absolute) to an absolute Path.
+        Relative paths are resolved from DATA_DIR parent (project root)."""
+        p = Path(stored_path)
+        if p.is_absolute():
+            return p
+        return DATA_DIR.parent / stored_path
 
     async def ensure_builtin_modules(self, session: AsyncSession) -> list[str]:
         """Ensure all built-in modules from builtin_modules/ are registered.
@@ -97,8 +119,8 @@ class ModuleManager:
                 description=module_info.get("description") if module_info else None,
                 version=module_info.get("version", "1.0.0") if module_info else "1.0.0",
                 code_source="builtin",
-                script_path=str(target_script),
-                config_path=str(target_config) if target_config else None,
+                script_path=self._relative_path(target_script),
+                config_path=self._relative_path(target_config) if target_config else None,
                 is_builtin=True,
                 builtin_source=name,
                 requirements=json.dumps(self.BUILTIN_REQUIREMENTS.get(name, [])),
@@ -169,8 +191,8 @@ class ModuleManager:
             version=module_info.get("version", version) if module_info else version,
             author=author,
             code_source=code_source,
-            script_path=str(script_path),
-            config_path=str(config_path) if config_path else None,
+            script_path=self._relative_path(script_path),
+            config_path=self._relative_path(config_path) if config_path else None,
         )
         session.add(module)
         try:
@@ -216,12 +238,12 @@ class ModuleManager:
             # Update script_path and config_path
             old_script = Path(module.script_path)
             new_script = new_dir / old_script.name
-            module.script_path = str(new_script)
+            module.script_path = self._relative_path(new_script)
 
             if module.config_path:
                 old_config = Path(module.config_path)
                 new_config = new_dir / old_config.name
-                module.config_path = str(new_config)
+                module.config_path = self._relative_path(new_config)
 
             # For built-in modules, set builtin_source if not already set
             if module.is_builtin and not module.builtin_source:
@@ -318,16 +340,16 @@ class ModuleManager:
         if not valid:
             raise ModuleManagerError("Invalid module code", "; ".join(errors))
 
-        script_path = Path(module.script_path)
+        script_path = self._resolve_path(module.script_path)
         script_path.write_text(code, encoding="utf-8")
 
         if config_toml is not None:
             errors = validate_toml_content(config_toml)
             if errors:
                 raise ModuleManagerError("Invalid TOML config", "; ".join(errors))
-            config_path = Path(module.config_path) if module.config_path else MODULES_DIR / name / "config.toml"
+            config_path = self._resolve_path(module.config_path) if module.config_path else MODULES_DIR / name / "config.toml"
             config_path.write_text(config_toml, encoding="utf-8")
-            module.config_path = str(config_path)
+            module.config_path = self._relative_path(config_path)
 
         module.updated_at = datetime.now()
         try:
@@ -341,12 +363,12 @@ class ModuleManager:
     async def get_code(self, session: AsyncSession, name: str) -> dict:
         """Get module code and config content."""
         module = await self._get_module(session, name)
-        script_path = Path(module.script_path)
+        script_path = self._resolve_path(module.script_path)
         code = script_path.read_text(encoding="utf-8") if script_path.exists() else ""
 
         config_toml = None
         if module.config_path:
-            config_path = Path(module.config_path)
+            config_path = self._resolve_path(module.config_path)
             if config_path.exists():
                 config_toml = config_path.read_text(encoding="utf-8")
 
@@ -457,12 +479,68 @@ class ModuleManager:
             if mod:
                 registry.append({
                     "name": mod.name,
-                    "script_path": mod.script_path,
-                    "config_path": mod.config_path or "",
+                    "script_path": str(self._resolve_path(mod.script_path)),
+                    "config_path": str(self._resolve_path(mod.config_path)) if mod.config_path else "",
                 })
 
         registry_path = SERVICES_DIR / service.name / ".modules.json"
         registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+    async def repair_paths(self, session: AsyncSession) -> int:
+        """Repair module script_path and config_path stored as absolute paths.
+        Converts them to relative paths, resolves stale/deploy-mismatched paths,
+        and restores builtin module files if missing on disk.
+        Returns number of modules repaired."""
+        modules = await self.list_all(session)
+        repaired = 0
+        for mod in modules:
+            expected_script = self._relative_path(MODULES_DIR / mod.name / "module.py")
+            expected_config = self._relative_path(MODULES_DIR / mod.name / "config.toml")
+
+            script_path = self._resolve_path(mod.script_path)
+
+            # Restore builtin module files from builtin_modules/ if missing
+            if not script_path.exists() and mod.is_builtin:
+                builtin_dir = BUILTIN_MODULES_DIR / mod.builtin_source
+                builtin_script = builtin_dir / "module.py"
+                if builtin_script.exists():
+                    target_dir = MODULES_DIR / mod.name
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target_script = target_dir / "module.py"
+                    shutil.copy2(str(builtin_script), str(target_script))
+                    builtin_config = builtin_dir / "config.toml"
+                    if builtin_config.exists():
+                        target_config = target_dir / "config.toml"
+                        shutil.copy2(str(builtin_config), str(target_config))
+                    script_path = target_script
+                    logger.info(f"Restored builtin module '%s' files from '%s'", mod.name, builtin_dir)
+
+            if not script_path.exists() or mod.script_path != expected_script:
+                logger.warning(
+                    "Module '%s' has stale script_path '%s', updating to '%s'",
+                    mod.name, mod.script_path, expected_script,
+                )
+                mod.script_path = expected_script
+                repaired += 1
+
+            if mod.config_path:
+                config_path = self._resolve_path(mod.config_path)
+                if not config_path.exists() or mod.config_path != expected_config:
+                    logger.warning(
+                        "Module '%s' has stale config_path '%s', updating to '%s'",
+                        mod.name, mod.config_path, expected_config,
+                    )
+                    mod.config_path = expected_config
+                    repaired += 1
+
+        if repaired > 0:
+            try:
+                await session.commit()
+                logger.info(f"Repaired {repaired} module path entries")
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Failed to commit module path repairs: {e}")
+        return repaired
 
     async def _get_module(self, session: AsyncSession, name: str) -> Module:
         result = await session.execute(select(Module).where(Module.name == name))

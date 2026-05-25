@@ -95,4 +95,35 @@ const api = {
 
     // Health
     health: () => request('GET', '/health'),
+
+    // Backup & Restore
+    getBackupItems: () => request('GET', '/backup/items'),
+    createBackup: (data) => {
+        return fetch(`${API_BASE}/backup/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        }).then(async res => {
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                throw new Error(err.detail || res.statusText);
+            }
+            const blob = await res.blob();
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="?([^"]+)"?/);
+            const filename = match ? match[1] : 'backup.zip';
+            return { blob, filename };
+        });
+    },
+    previewBackup: (file) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        return request('POST', '/backup/preview', fd);
+    },
+    restoreBackup: (file, options) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('options', JSON.stringify(options));
+        return request('POST', '/backup/restore', fd);
+    },
 };

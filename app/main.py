@@ -1,5 +1,6 @@
 """PyService Manager - FastAPI application entry point."""
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
@@ -39,10 +41,18 @@ async def lifespan(app: FastAPI):
         module_manager = ModuleManager()
         created = await module_manager.ensure_builtin_modules(session)
         if created:
-            import logging
-            logging.getLogger("app.main").info(f"Registered built-in modules: {created}")
+            logger.info(f"Registered built-in modules: {created}")
 
     await config_watcher.start()
+
+    # Repair module paths (fix absolute/stale paths from dev environment)
+    from app.core.module_manager import ModuleManager
+    from app.database import async_session
+    async with async_session() as session:
+        module_manager = ModuleManager()
+        repaired = await module_manager.repair_paths(session)
+        if repaired:
+            logger.info(f"Repaired {repaired} module path entries")
 
     # Sync all service statuses
     from app.database import async_session
@@ -62,6 +72,15 @@ app = FastAPI(
     description="Python Service Management Platform with Module System",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS middleware - allow cross-origin requests for web UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Global exception handler
@@ -88,11 +107,13 @@ from app.api.services import router as services_router
 from app.api.config import router as config_router
 from app.api.logs import router as logs_router
 from app.api.modules import router as modules_router
+from app.api.backup import router as backup_router
 
 app.include_router(services_router, prefix=API_PREFIX)
 app.include_router(config_router, prefix=API_PREFIX)
 app.include_router(logs_router, prefix=API_PREFIX)
 app.include_router(modules_router, prefix=API_PREFIX)
+app.include_router(backup_router, prefix=API_PREFIX)
 
 
 # Serve static files
@@ -118,7 +139,8 @@ async def health():
 
 def cli():
     """CLI entry point."""
-    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=True, timeout_graceful_shutdown=3)
+    reload = os.getenv("PYSERVICE_RELOAD", "true").lower() in ("true", "1", "yes")
+    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=reload, timeout_graceful_shutdown=3)
 
 
 if __name__ == "__main__":
