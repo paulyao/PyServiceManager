@@ -1,0 +1,21 @@
+[Unit]
+Description=PyService Manager - Python Service Management Platform
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env uv run pyservice
+ExecReload=/bin/kill -HUP $MAINPID
+Environment=PYTHONUNBUFFERED=1
+Environment=PYSERVICE_RELOAD=false
+Environment=PYSERVICE_HOST=0.0.0.0
+Environment=PYSERVICE_PORT=8900
+WorkingDirectory=/opt/pyservice
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pyservice
+
+[Install]
+WantedBy=multi-user.target
