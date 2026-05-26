@@ -40,6 +40,7 @@ class ModuleManager:
     BUILTIN_REQUIREMENTS: dict[str, list[str]] = {
         "mysql-helper": ["pymysql>=1.1"],
         "http-client": ["certifi"],
+        "idaas-eiam": ["alibabacloud-eiam20211201>=2.0"],
     }
 
     @staticmethod
