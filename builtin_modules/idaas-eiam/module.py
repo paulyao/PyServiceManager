@@ -60,8 +60,8 @@ class Module:
             access_key_secret=sk,
             endpoint=f"eiam.{region_id}.aliyuncs.com",
         )
-        open_api_cfg.read_timeout = self._timeout
-        open_api_cfg.connect_timeout = self._timeout
+        open_api_cfg.read_timeout = self._timeout * 1000
+        open_api_cfg.connect_timeout = self._timeout * 1000
 
         with self._lock:
             self._client = EiamClient(open_api_cfg)
