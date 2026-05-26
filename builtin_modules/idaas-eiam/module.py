@@ -125,6 +125,53 @@ class Module:
         except Exception as e:
             return {"success": False, "data": None, "error": str(e)}
 
+    def get_user(self, *, user_id):
+        """Get an EIAM user's detailed information including custom fields.
+
+        Args:
+            user_id: The user ID (required).
+
+        Returns:
+            dict: {"success": bool, "data": {"user_id": str, "display_name": str, "custom_fields": [...]}, "error": str|None}
+        """
+        try:
+            self._ensure_client()
+            from alibabacloud_eiam20211201 import models as m
+
+            request = m.GetUserRequest(
+                instance_id=self._instance_id,
+                user_id=user_id,
+            )
+
+            from alibabacloud_tea_util import models as util_models
+            runtime = util_models.RuntimeOptions()
+
+            response = self._client.get_user_with_options(request, runtime)
+            user = response.body.user
+
+            custom_fields = []
+            for cf in (user.custom_fields or []):
+                custom_fields.append({
+                    "field_name": cf.field_name,
+                    "field_value": cf.field_value,
+                })
+
+            return {
+                "success": True,
+                "data": {
+                    "user_id": user.user_id,
+                    "display_name": user.display_name,
+                    "username": user.username,
+                    "email": user.email,
+                    "phone_number": user.phone_number,
+                    "status": user.status,
+                    "custom_fields": custom_fields,
+                },
+                "error": None,
+            }
+        except Exception as e:
+            return {"success": False, "data": None, "error": str(e)}
+
     def list_applications(self, *, application_name=None, page_size=100, page_number=1):
         """List EIAM applications with optional filter.
 
