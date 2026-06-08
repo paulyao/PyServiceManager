@@ -6,3 +6,16 @@
 # 默认配置（仅作参考，实际参数在调用时由调用者提供）
 timeout = 30
 user_agent = "PyService-HttpClient/1.0"
+
+[retry]
+# 错误重试配置
+# 是否启用自动重试（对网络错误、超时、HTTP 5xx 生效）
+enabled = true
+# 最大重试次数（不含首次请求）
+max_retries = 3
+# 首次重试前的基础等待秒数
+base_delay = 1
+# 单次重试最大等待秒数
+max_delay = 30
+# 重试总时间上限（秒）
+max_total_time = 120
