@@ -1,6 +1,7 @@
 """Web Service Module - 统一 HTTP 服务器模块
 
-为需要展示 Web 页面或 API 的服务提供统一的路由能力，避免每个服务自行启动 HTTP 服务器。
+为需要展示 Web 页面或 API 的服务提供统一的路由能力。
+自动启动独立守护进程运行 HTTP 服务器，多服务共享同一实例，避免重复启动。
 
 Usage in service code:
     web_mod = modules.get("web-service")
@@ -8,7 +9,7 @@ Usage in service code:
     # 注册 HTML 页面
     web_mod.register_page("/", "<html>...</html>")
 
-    # 注册 JSON API
+    # 注册 JSON API（callback 为无参函数，返回 dict）
     web_mod.register_api("/api/data", lambda: {"key": "value"})
 
     # 注册自定义处理器
@@ -20,86 +21,38 @@ Usage in service code:
 """
 
 import json
+import os
+import socket
+import subprocess
+import sys
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+import time
+import urllib.request
+from pathlib import Path
 
 
-class _WebServiceHandler(BaseHTTPRequestHandler):
-    """通用 HTTP 请求处理器，将请求分派到模块路由表。"""
-
-    def do_GET(self):
-        self._handle("GET")
-
-    def do_POST(self):
-        self._handle("POST")
-
-    def do_PUT(self):
-        self._handle("PUT")
-
-    def do_DELETE(self):
-        self._handle("DELETE")
-
-    def do_PATCH(self):
-        self._handle("PATCH")
-
-    def _handle(self, method):
-        """解析请求并调用模块的 _dispatch 方法。"""
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
-        query = parse_qs(parsed.query)
-
-        # 读取请求体
-        body = None
-        content_length = self.headers.get("Content-Length")
-        if content_length:
-            try:
-                body = self.rfile.read(int(content_length)).decode("utf-8", errors="replace")
-            except Exception:
-                body = None
-
-        headers = dict(self.headers)
-
-        response = self.server.module._dispatch(method, path, headers, body, query)
-
-        status_code = response.get("status_code", 200)
-        content_type = response.get("content_type", "text/plain")
-        body_content = response.get("body", "")
-
-        self.send_response(status_code)
-        self.send_header("Content-Type", content_type)
-        if isinstance(body_content, str):
-            body_bytes = body_content.encode("utf-8")
-        else:
-            body_bytes = body_content
-        self.send_header("Content-Length", str(len(body_bytes)))
-        self.end_headers()
-        self.wfile.write(body_bytes)
-
-    def log_message(self, format, *args):
-        """重定向日志到模块 logger。"""
-        if self.server.module._logger:
-            self.server.module._logger.debug(f"HTTP {args[0] if args else ''}")
+# 模块文件所在目录（用于定位 web_daemon.py）
+_MODULE_DIR = Path(__file__).resolve().parent
 
 
 class Module:
     name = "web-service"
-    version = "1.0.0"
-    description = "Unified HTTP server module for serving web pages and APIs"
+    version = "2.0.0"
+    description = "Unified HTTP server module with shared daemon process"
 
     def __init__(self):
-        self._httpd = None
-        self._server_thread = None
-        self._routes = {}  # {(path, method): callback}
-        self._routes_lock = threading.Lock()
         self._logger = None
         self._service_name = ""
         self._url_prefix = ""
         self._host = "0.0.0.0"
         self._port = 8910
+        self._data_dir = None
+        self._daemon_started = False
+        self._api_threads = {}  # {full_path: (thread, stop_event)}
+        self._registered_paths = []  # 跟踪已注册路径，供 on_stop 清理
 
     def on_start(self, ctx):
-        """启动 HTTP 服务器，从 ctx.service_name 生成 URL 前缀。"""
+        """启动守护进程（如果未运行），初始化 URL 前缀。"""
         self._logger = ctx.logger
         self._service_name = ctx.service_name
         self._url_prefix = "/" + ctx.service_name
@@ -108,33 +61,45 @@ class Module:
         self._port = server_cfg.get("port", 8910)
         self._host = server_cfg.get("host", "0.0.0.0")
 
-        try:
-            self._httpd = HTTPServer((self._host, self._port), _WebServiceHandler)
-            self._httpd.module = self  # 让 handler 能访问模块实例
-            self._server_thread = threading.Thread(
-                target=self._httpd.serve_forever, daemon=True
-            )
-            self._server_thread.start()
+        # 数据目录：路由表和 API 数据文件存储位置
+        data_dir_str = ctx.module_config.get("data_dir", "")
+        if data_dir_str:
+            self._data_dir = Path(data_dir_str)
+        else:
+            self._data_dir = ctx.data_dir / ".web-service"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+
+        # 启动守护进程（如果未运行）
+        if not self._is_daemon_running():
+            self._start_daemon()
+        else:
             ctx.logger.info(
-                f"Module {self.name} started - service: {self._service_name}, "
-                f"listening on {self._host}:{self._port}, "
+                f"Module {self.name} - service: {self._service_name}, "
+                f"daemon already running on {self._host}:{self._port}, "
                 f"url_prefix: {self._url_prefix}"
             )
-        except OSError as e:
-            ctx.logger.error(
-                f"Module {self.name} failed to start HTTP server on "
-                f"{self._host}:{self._port}: {e}"
-            )
-            self._httpd = None
 
     def on_stop(self, ctx):
-        """优雅关闭 HTTP 服务器。"""
-        if self._httpd:
-            threading.Thread(target=self._httpd.shutdown, daemon=True).start()
-            import time
-            time.sleep(0.5)
-            self._httpd.server_close()
-            ctx.logger.info(f"Module {self.name} HTTP server stopped")
+        """停止 API 后台线程，注销本服务的路由。"""
+        # 停止所有 API 后台线程
+        for path, (thread, stop_event) in self._api_threads.items():
+            stop_event.set()
+            thread.join(timeout=3)
+        self._api_threads.clear()
+
+        # 注销本服务的所有路由
+        for path in self._registered_paths:
+            self._unregister_with_daemon(path)
+        self._registered_paths.clear()
+
+        # 清理本服务的 API 数据文件
+        service_dir = self._data_dir / self._service_name
+        if service_dir.exists():
+            for f in service_dir.iterdir():
+                f.unlink()
+            service_dir.rmdir()
+
+        ctx.logger.info(f"Module {self.name} stopped - service: {self._service_name}")
 
     def on_config_reload(self, ctx):
         """配置热重载回调。"""
@@ -147,6 +112,10 @@ class Module:
 
     def register_handler(self, path, method, callback):
         """注册一个路由处理器。
+
+        注意：callback 函数在当前服务进程中运行（通过后台线程定期调用），
+        守护进程从数据文件读取结果。适用于需要动态计算的 API。
+        对于简单的静态内容，请使用 register_page。
 
         Args:
             path: URL 路径（相对），如 "/" 或 "/api/data"
@@ -161,11 +130,30 @@ class Module:
         full_path = self._make_full_path(path)
         method_upper = method.upper()
 
-        with self._routes_lock:
-            self._routes[(full_path, method_upper)] = callback
+        # 对于 handler 类型，先调用一次获取初始数据，然后以 API 模式注册
+        try:
+            initial_request = {
+                "method": method_upper, "path": full_path,
+                "headers": {}, "body": None, "query": {},
+            }
+            initial_response = callback(initial_request)
+            data_file = self._write_data_file(full_path, json.dumps(
+                initial_response, ensure_ascii=False
+            ))
+        except Exception as e:
+            if self._logger:
+                self._logger.warning(f"Initial handler call failed: {e}")
+            data_file = ""
 
-        if self._logger:
-            self._logger.info(f"Route registered: {method_upper} {full_path}")
+        route_info = {
+            "type": "api",
+            "data_file": str(data_file),
+            "service": self._service_name,
+        }
+        self._register_with_daemon(full_path, method_upper, route_info)
+
+        if full_path not in self._registered_paths:
+            self._registered_paths.append(full_path)
 
         return {
             "success": True,
@@ -183,17 +171,28 @@ class Module:
         Returns:
             dict: {"success": bool, "data": dict, "error": str|None}
         """
-        def _page_handler(request_info):
-            return {
-                "status_code": 200,
-                "content_type": "text/html; charset=utf-8",
-                "body": html,
-            }
+        full_path = self._make_full_path(path)
+        route_info = {
+            "type": "page",
+            "html": html,
+            "service": self._service_name,
+        }
+        self._register_with_daemon(full_path, "GET", route_info)
 
-        return self.register_handler(path, "GET", _page_handler)
+        if full_path not in self._registered_paths:
+            self._registered_paths.append(full_path)
+
+        return {
+            "success": True,
+            "data": {"path": full_path, "method": "GET"},
+            "error": None,
+        }
 
     def register_api(self, path, callback):
         """注册一个 JSON API 端点（GET 路由）。
+
+        callback 为无参函数，返回 dict。模块会在后台线程中定期调用 callback
+        并将结果写入数据文件，守护进程从文件读取并响应请求。
 
         Args:
             path: URL 路径（相对）
@@ -202,30 +201,52 @@ class Module:
         Returns:
             dict: {"success": bool, "data": dict, "error": str|None}
         """
-        def _api_handler(request_info):
-            try:
-                data = callback()
-                response_body = json.dumps(
-                    {"success": True, "data": data, "error": None},
-                    ensure_ascii=False,
-                )
-                return {
-                    "status_code": 200,
-                    "content_type": "application/json; charset=utf-8",
-                    "body": response_body,
-                }
-            except Exception as e:
-                error_body = json.dumps(
-                    {"success": False, "data": None, "error": str(e)},
-                    ensure_ascii=False,
-                )
-                return {
-                    "status_code": 500,
-                    "content_type": "application/json; charset=utf-8",
-                    "body": error_body,
-                }
+        full_path = self._make_full_path(path)
 
-        return self.register_handler(path, "GET", _api_handler)
+        # 立即调用一次 callback 获取初始数据
+        try:
+            data = callback()
+            response_body = json.dumps(
+                {"success": True, "data": data, "error": None},
+                ensure_ascii=False,
+            )
+            data_file = self._write_data_file(full_path, response_body)
+        except Exception as e:
+            if self._logger:
+                self._logger.warning(f"Initial API callback failed: {e}")
+            data_file = self._get_data_file_path(full_path)
+            # 写入空数据占位
+            data_file.parent.mkdir(parents=True, exist_ok=True)
+            data_file.write_text(
+                json.dumps({"success": False, "data": None, "error": "Not ready"}),
+                encoding="utf-8",
+            )
+
+        route_info = {
+            "type": "api",
+            "data_file": str(data_file),
+            "service": self._service_name,
+        }
+        self._register_with_daemon(full_path, "GET", route_info)
+
+        if full_path not in self._registered_paths:
+            self._registered_paths.append(full_path)
+
+        # 启动后台线程定期刷新数据
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=self._api_refresh_loop,
+            args=(callback, data_file, stop_event),
+            daemon=True,
+        )
+        thread.start()
+        self._api_threads[full_path] = (thread, stop_event)
+
+        return {
+            "success": True,
+            "data": {"path": full_path, "method": "GET"},
+            "error": None,
+        }
 
     def unregister(self, path):
         """移除指定路径的所有路由。
@@ -237,20 +258,22 @@ class Module:
             dict: {"success": bool, "data": dict, "error": str|None}
         """
         full_path = self._make_full_path(path)
-        removed = 0
 
-        with self._routes_lock:
-            keys_to_remove = [k for k in self._routes if k[0] == full_path]
-            for key in keys_to_remove:
-                del self._routes[key]
-                removed += 1
+        # 停止后台线程
+        if full_path in self._api_threads:
+            thread, stop_event = self._api_threads.pop(full_path)
+            stop_event.set()
+            thread.join(timeout=3)
 
-        if self._logger:
-            self._logger.info(f"Route unregistered: {full_path} ({removed} methods)")
+        # 从守护进程注销
+        self._unregister_with_daemon(full_path)
+
+        if full_path in self._registered_paths:
+            self._registered_paths.remove(full_path)
 
         return {
             "success": True,
-            "data": {"path": full_path, "removed_count": removed},
+            "data": {"path": full_path, "removed_count": 1},
             "error": None,
         }
 
@@ -278,99 +301,142 @@ class Module:
         """拼接 URL 前缀和路径。"""
         if not path.startswith("/"):
             path = "/" + path
-        # 避免双斜杠：前缀 "/" + path "/" -> "/"
         if path == "/":
             return self._url_prefix
         return self._url_prefix + path
 
-    def _dispatch(self, method, path, headers, body, query):
-        """路由查找与执行。锁内查找 callback，释放锁后执行。"""
-        with self._routes_lock:
-            callback = self._routes.get((path, method))
-
-        if callback is None:
-            # 根路径自动生成索引页
-            if path == "/" and method == "GET":
-                return self._auto_index()
-            return {
-                "status_code": 404,
-                "content_type": "application/json; charset=utf-8",
-                "body": json.dumps({"error": "Not Found", "path": path}),
-            }
+    def _is_daemon_running(self):
+        """检查守护进程是否正在运行（PID 文件 + 端口探测）。"""
+        pid_file = self._data_dir / "web-service.pid"
+        if not pid_file.exists():
+            return False
 
         try:
-            request_info = {
-                "method": method,
-                "path": path,
-                "headers": headers,
-                "body": body,
-                "query": query,
-            }
-            return callback(request_info)
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)  # 检查进程是否存在
+        except (ValueError, OSError):
+            # PID 无效或进程不存在，清理旧 PID 文件
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+            return False
+
+        # 进一步验证端口是否在监听
+        return self._check_port_open()
+
+    def _check_port_open(self):
+        """检查端口是否有进程在监听。"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(("127.0.0.1", self._port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+    def _start_daemon(self):
+        """启动守护进程。"""
+        daemon_script = _MODULE_DIR / "web_daemon.py"
+        if not daemon_script.exists():
+            if self._logger:
+                self._logger.error(f"web_daemon.py not found at {daemon_script}")
+            return
+
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(daemon_script),
+                    "--host", self._host,
+                    "--port", str(self._port),
+                    "--data-dir", str(self._data_dir),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self._daemon_started = True
+
+            # 等待守护进程就绪
+            for _ in range(10):
+                time.sleep(0.5)
+                if self._check_port_open():
+                    if self._logger:
+                        self._logger.info(
+                            f"Module {self.name} started daemon - service: {self._service_name}, "
+                            f"{self._host}:{self._port}, url_prefix: {self._url_prefix}"
+                        )
+                    return
+
+            if self._logger:
+                self._logger.warning("Daemon process started but port not yet open")
+
         except Exception as e:
             if self._logger:
-                self._logger.error(f"Handler error for {method} {path}: {e}")
-            return {
-                "status_code": 500,
-                "content_type": "application/json; charset=utf-8",
-                "body": json.dumps({"error": str(e)}),
-            }
+                self._logger.error(f"Failed to start web daemon: {e}")
 
-    def _auto_index(self):
-        """生成自动索引页，列出所有已注册路由。"""
-        with self._routes_lock:
-            routes = list(self._routes.keys())
+    def _register_with_daemon(self, path, method, route_info):
+        """通过 HTTP 向守护进程注册路由。"""
+        url = f"http://127.0.0.1:{self._port}/_register"
+        payload = json.dumps({
+            "path": path,
+            "method": method,
+            "route_info": route_info,
+        }).encode("utf-8")
 
-        # 按前缀分组
-        groups = {}
-        for path, method in routes:
-            # 提取服务前缀（第一段路径）
-            parts = path.strip("/").split("/")
-            prefix = "/" + parts[0] if parts[0] else "/"
-            if prefix not in groups:
-                groups[prefix] = []
-            groups[prefix].append((path, method))
+        try:
+            req = urllib.request.Request(
+                url, data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=5)
+            if self._logger:
+                self._logger.info(f"Route registered: {method} {path}")
+        except Exception as e:
+            if self._logger:
+                self._logger.warning(f"Failed to register route {method} {path}: {e}")
 
-        rows = []
-        for prefix, route_list in sorted(groups.items()):
-            rows.append(f'<tr><td colspan="2"><strong>{prefix}</strong></td></tr>')
-            for path, method in sorted(route_list):
-                rows.append(
-                    f'<tr><td><a href="{path}">{path}</a></td>'
-                    f'<td><span class="method">{method}</span></td></tr>'
+    def _unregister_with_daemon(self, path):
+        """通过 HTTP 从守护进程注销路由。"""
+        url = f"http://127.0.0.1:{self._port}/_register"
+        payload = json.dumps({"path": path}).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                url, data=payload, method="DELETE",
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            pass  # 守护进程可能已关闭
+
+    def _get_data_file_path(self, full_path):
+        """生成 API 数据文件路径。"""
+        safe_name = full_path.strip("/").replace("/", "__") or "root"
+        return self._data_dir / self._service_name / f"{safe_name}.json"
+
+    def _write_data_file(self, full_path, content):
+        """写入 API 数据文件，返回文件路径。"""
+        data_file = self._get_data_file_path(full_path)
+        data_file.parent.mkdir(parents=True, exist_ok=True)
+        data_file.write_text(content, encoding="utf-8")
+        return data_file
+
+    def _api_refresh_loop(self, callback, data_file, stop_event):
+        """后台线程：定期调用 callback 并更新数据文件。"""
+        while not stop_event.is_set():
+            stop_event.wait(timeout=5)  # 每 5 秒刷新一次
+            if stop_event.is_set():
+                break
+            try:
+                data = callback()
+                response_body = json.dumps(
+                    {"success": True, "data": data, "error": None},
+                    ensure_ascii=False,
                 )
-
-        html = f"""\
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<title>Web Service Routes</title>
-<style>
-body {{ font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }}
-h1 {{ color: #1f2937; }}
-table {{ width: 100%; border-collapse: collapse; margin-top: 16px; }}
-th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }}
-th {{ background: #f9fafb; font-weight: 600; }}
-a {{ color: #3b82f6; text-decoration: none; }}
-a:hover {{ text-decoration: underline; }}
-.method {{ background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 4px; font-size: 12px; }}
-</style>
-</head>
-<body>
-<h1>Web Service Routes</h1>
-<p>Service: <strong>{self._service_name}</strong> | Prefix: <code>{self._url_prefix}</code></p>
-<table>
-<thead><tr><th>Path</th><th>Method</th></tr></thead>
-<tbody>
-{"".join(rows) if rows else '<tr><td colspan="2">No routes registered</td></tr>'}
-</tbody>
-</table>
-</body>
-</html>
-"""
-        return {
-            "status_code": 200,
-            "content_type": "text/html; charset=utf-8",
-            "body": html,
-        }
+                data_file.write_text(response_body, encoding="utf-8")
+            except Exception as e:
+                if self._logger:
+                    self._logger.debug(f"API refresh failed for {data_file.name}: {e}")

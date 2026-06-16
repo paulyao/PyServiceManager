@@ -5,3 +5,7 @@
 port = 8910
 # Bind address (default: 0.0.0.0)
 host = "0.0.0.0"
+
+# 路由表和 API 数据文件存储目录
+# 留空则默认使用服务的 data_dir/.web-service
+data_dir = ""
