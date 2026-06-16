@@ -1,0 +1,7 @@
+# Web Service module - unified HTTP server for serving pages and APIs
+
+[server]
+# Listening port (default: 8910)
+port = 8910
+# Bind address (default: 0.0.0.0)
+host = "0.0.0.0"

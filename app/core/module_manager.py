@@ -41,6 +41,7 @@ class ModuleManager:
         "mysql-helper": ["pymysql>=1.1"],
         "http-client": ["certifi"],
         "idaas-eiam": ["alibabacloud-eiam20211201>=2.0"],
+        "web-service": [],
     }
 
     @staticmethod
