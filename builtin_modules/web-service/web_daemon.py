@@ -83,9 +83,64 @@ class DaemonHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Not Found", "path": path})
 
     def do_POST(self):
-        """内部注册 API（仅限 localhost）。"""
-        path = self.path.split("?")[0]
+        """处理 POST 请求：注册 API（localhost）或代理到回调服务器。"""
+        path = self.path.split("?")[0].rstrip("/") or "/"
 
+        # 内部注册 API：仅限 localhost
+        if path in ("/_register", "/_unregister"):
+            self._handle_registration(path)
+            return
+
+        # 检查是否为已注册的 POST 路由
+        with _ROUTES_LOCK:
+            route_entry = _ROUTES.get(path)
+            if route_entry:
+                route_info = route_entry.get("POST")
+            else:
+                route_info = None
+
+        if route_info and route_info.get("callback_url"):
+            self._proxy_to_callback(route_info["callback_url"], "POST", path)
+        else:
+            self._send_json(404, {"error": "Not Found", "path": path})
+
+    def do_PUT(self):
+        self._proxy_method("PUT")
+
+    def do_DELETE(self):
+        """DELETE 方式注销路由，或代理 DELETE 请求。"""
+        path = self.path.split("?")[0]
+        if path.startswith("/_unregister/"):
+            route_path = "/" + path[len("/_unregister/"):]
+            removed = 0
+            with _ROUTES_LOCK:
+                if route_path in _ROUTES:
+                    removed = len(_ROUTES[route_path])
+                    del _ROUTES[route_path]
+                    _save_routes(self.data_dir)
+            self._send_json(200, {"success": True, "removed_count": removed})
+            return
+        self._proxy_method("DELETE")
+
+    def do_PATCH(self):
+        self._proxy_method("PATCH")
+
+    def _proxy_method(self, method):
+        """代理 PUT/DELETE/PATCH 请求到回调服务器。"""
+        path = self.path.split("?")[0].rstrip("/") or "/"
+        with _ROUTES_LOCK:
+            route_entry = _ROUTES.get(path)
+            if route_entry:
+                route_info = route_entry.get(method)
+            else:
+                route_info = None
+        if route_info and route_info.get("callback_url"):
+            self._proxy_to_callback(route_info["callback_url"], method, path)
+        else:
+            self._send_json(404, {"error": "Not Found", "path": path})
+
+    def _handle_registration(self, path):
+        """处理路由注册/注销（仅限 localhost）。"""
         remote = self.client_address[0]
         if remote not in ("127.0.0.1", "::1", "localhost"):
             self._send_json(403, {"error": "Registration API is localhost only"})
@@ -126,23 +181,39 @@ class DaemonHandler(BaseHTTPRequestHandler):
             _log(f"Route unregistered: {route_path} ({removed} methods)")
             self._send_json(200, {"success": True, "path": route_path, "removed_count": removed})
 
-        else:
-            self._send_json(404, {"error": "Unknown registration endpoint"})
+    def _proxy_to_callback(self, callback_url, method, path):
+        """代理请求到服务的回调服务器。"""
+        import urllib.request
+        import urllib.error
 
-    def do_DELETE(self):
-        """DELETE 方式注销路由。"""
-        path = self.path.split("?")[0]
-        if path.startswith("/_unregister/"):
-            route_path = "/" + path[len("/_unregister/"):]
-            removed = 0
-            with _ROUTES_LOCK:
-                if route_path in _ROUTES:
-                    removed = len(_ROUTES[route_path])
-                    del _ROUTES[route_path]
-                    _save_routes(self.data_dir)
-            self._send_json(200, {"success": True, "removed_count": removed})
-        else:
-            self._send_json(404, {"error": "Not Found"})
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        payload = json.dumps({
+            "method": method,
+            "path": path,
+            "headers": dict(self.headers),
+            "body": body.decode("utf-8", errors="replace") if body else "",
+        }).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                callback_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp_body = resp.read()
+                resp_ct = resp.headers.get("Content-Type", "application/json")
+                self.send_response(resp.status)
+                self.send_header("Content-Type", resp_ct)
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+        except Exception as e:
+            _log(f"Callback proxy error for {method} {path}: {e}", "ERROR")
+            self._send_json(502, {"error": f"Callback server error: {e}"})
 
     def _serve_route(self, route_info):
         """根据路由类型返回响应。"""

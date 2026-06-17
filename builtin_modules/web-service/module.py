@@ -28,11 +28,67 @@ import sys
 import threading
 import time
 import urllib.request
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 
 # 模块文件所在目录（用于定位 web_daemon.py）
 _MODULE_DIR = Path(__file__).resolve().parent
+
+
+class _CallbackHandler(BaseHTTPRequestHandler):
+    """内部回调处理器：接收守护进程转发的请求，执行注册的回调函数。"""
+
+    callbacks = {}  # {path: callback_func}
+
+    def do_POST(self):
+        self._handle_callback()
+
+    def _handle_callback(self):
+        path = self.path
+        callback = self.callbacks.get(path)
+        if not callback:
+            self._send_response(404, {
+                "status_code": 404,
+                "content_type": "application/json; charset=utf-8",
+                "body": json.dumps({"error": "No callback for path"}),
+            })
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+
+        try:
+            request_data = json.loads(body)
+        except json.JSONDecodeError:
+            request_data = {"method": "POST", "path": path, "headers": {}, "body": body, "query": {}}
+
+        try:
+            response = callback(request_data)
+        except Exception as e:
+            response = {
+                "status_code": 500,
+                "content_type": "application/json; charset=utf-8",
+                "body": json.dumps({"error": str(e)}),
+            }
+
+        self._send_response(
+            response.get("status_code", 200),
+            response,
+            response.get("content_type", "application/json; charset=utf-8"),
+            response.get("body", ""),
+        )
+
+    def _send_response(self, status_code, response_dict, content_type="application/json; charset=utf-8", body=""):
+        self.send_response(status_code)
+        self.send_header("Content-Type", content_type)
+        body_bytes = body.encode("utf-8") if isinstance(body, str) else body
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.end_headers()
+        self.wfile.write(body_bytes)
+
+    def log_message(self, format, *args):
+        pass  # 静默日志
 
 
 class Module:
@@ -50,6 +106,9 @@ class Module:
         self._daemon_started = False
         self._api_threads = {}  # {full_path: (thread, stop_event)}
         self._registered_paths = []  # 跟踪已注册路径，供 on_stop 清理
+        self._callback_server = None  # 内部回调服务器（POST 路由用）
+        self._callback_port = None
+        self._callback_handlers = {}  # {full_path: callback_func}
 
     def on_start(self, ctx):
         """启动守护进程（如果未运行），初始化 URL 前缀。"""
@@ -79,8 +138,18 @@ class Module:
                 f"url_prefix: {self._url_prefix}"
             )
 
+        # 启动内部回调服务器（用于 POST/PUT/DELETE 路由的实时回调）
+        self._start_callback_server()
+
     def on_stop(self, ctx):
-        """停止 API 后台线程，注销本服务的路由。"""
+        """停止回调服务器、API 后台线程，注销本服务的路由。"""
+        # 先停止回调服务器（在注销路由前，确保守护进程还能访问回调）
+        if self._callback_server:
+            threading.Thread(target=self._callback_server.shutdown, daemon=True).start()
+            time.sleep(0.3)
+            self._callback_server.server_close()
+            self._callback_server = None
+
         # 停止所有 API 后台线程
         for path, (thread, stop_event) in self._api_threads.items():
             stop_event.set()
@@ -113,9 +182,9 @@ class Module:
     def register_handler(self, path, method, callback):
         """注册一个路由处理器。
 
-        注意：callback 函数在当前服务进程中运行（通过后台线程定期调用），
-        守护进程从数据文件读取结果。适用于需要动态计算的 API。
-        对于简单的静态内容，请使用 register_page。
+        GET 请求：callback 在后台线程中定期调用，结果写入数据文件，守护进程从文件读取。
+        POST/PUT/DELETE/PATCH 请求：callback 在内部回调服务器中实时执行，
+        守护进程将请求代理到回调服务器。
 
         Args:
             path: URL 路径（相对），如 "/" 或 "/api/data"
@@ -130,26 +199,37 @@ class Module:
         full_path = self._make_full_path(path)
         method_upper = method.upper()
 
-        # 对于 handler 类型，先调用一次获取初始数据，然后以 API 模式注册
-        try:
-            initial_request = {
-                "method": method_upper, "path": full_path,
-                "headers": {}, "body": None, "query": {},
-            }
-            initial_response = callback(initial_request)
-            data_file = self._write_data_file(full_path, json.dumps(
-                initial_response, ensure_ascii=False
-            ))
-        except Exception as e:
-            if self._logger:
-                self._logger.warning(f"Initial handler call failed: {e}")
-            data_file = ""
+        if method_upper == "GET":
+            # GET 路由：数据文件模式（后台刷新）
+            try:
+                initial_request = {
+                    "method": "GET", "path": full_path,
+                    "headers": {}, "body": None, "query": {},
+                }
+                initial_response = callback(initial_request)
+                data_file = self._write_data_file(full_path, json.dumps(
+                    initial_response, ensure_ascii=False
+                ))
+            except Exception as e:
+                if self._logger:
+                    self._logger.warning(f"Initial handler call failed: {e}")
+                data_file = ""
 
-        route_info = {
-            "type": "api",
-            "data_file": str(data_file),
-            "service": self._service_name,
-        }
+            route_info = {
+                "type": "api",
+                "data_file": str(data_file),
+                "service": self._service_name,
+            }
+        else:
+            # POST/PUT/DELETE/PATCH 路由：回调服务器模式（实时执行）
+            callback_url = f"http://127.0.0.1:{self._callback_port}{full_path}"
+            self._callback_handlers[full_path] = callback
+            route_info = {
+                "type": "callback",
+                "callback_url": callback_url,
+                "service": self._service_name,
+            }
+
         self._register_with_daemon(full_path, method_upper, route_info)
 
         if full_path not in self._registered_paths:
@@ -376,6 +456,25 @@ class Module:
         except Exception as e:
             if self._logger:
                 self._logger.error(f"Failed to start web daemon: {e}")
+
+    def _start_callback_server(self):
+        """启动内部回调服务器，用于 POST/PUT/DELETE 路由的实时回调。"""
+        # 绑定到随机端口
+        tmp_server = HTTPServer(("127.0.0.1", 0), _CallbackHandler)
+        self._callback_port = tmp_server.server_address[1]
+        tmp_server.server_close()
+
+        # 创建正式的回调服务器
+        _CallbackHandler.callbacks = self._callback_handlers
+        self._callback_server = HTTPServer(("127.0.0.1", self._callback_port), _CallbackHandler)
+        self._callback_server.callbacks = self._callback_handlers
+        thread = threading.Thread(target=self._callback_server.serve_forever, daemon=True)
+        thread.start()
+
+        if self._logger:
+            self._logger.info(
+                f"Callback server started on 127.0.0.1:{self._callback_port}"
+            )
 
     def _register_with_daemon(self, path, method, route_info):
         """通过 HTTP 向守护进程注册路由。"""
