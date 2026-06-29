@@ -69,19 +69,18 @@ def _next_run_timestamp(schedule_cfg, after=None):
 def _yesterday_time_range():
     """计算昨天整天的毫秒级 Unix 时间戳范围（本地时区）。
 
-    对应 Grafana URL 参数 from=now-1d/d&to=now-1d/d&timezone=browser，
-    即浏览器本地时区的昨天 00:00:00.000 到 23:59:59.999。
+    时间范围为昨天 00:00:01 到 23:59:59（含秒，不含毫秒）。
 
     Returns:
         tuple: (from_ms, to_ms, yesterday_str)
-            from_ms: 昨天 00:00:00.000 的毫秒时间戳字符串
-            to_ms: 昨天 23:59:59.999 的毫秒时间戳字符串
+            from_ms: 昨天 00:00:01 的毫秒时间戳字符串
+            to_ms: 昨天 23:59:59 的毫秒时间戳字符串
             yesterday_str: 昨天日期字符串，格式 YYYY-MM-DD
     """
     today = datetime.now().date()
     yesterday = today - timedelta(days=1)
-    start = datetime.combine(yesterday, dtime(0, 0, 0))  # 昨天 00:00:00.000
-    end = start + timedelta(days=1) - timedelta(milliseconds=1)  # 昨天 23:59:59.999
+    start = datetime.combine(yesterday, dtime(0, 0, 1))  # 昨天 00:00:01
+    end = datetime.combine(yesterday, dtime(23, 59, 59))  # 昨天 23:59:59
     from_ms = str(int(start.timestamp() * 1000))
     to_ms = str(int(end.timestamp() * 1000))
     return from_ms, to_ms, yesterday.strftime("%Y-%m-%d")
