@@ -1,0 +1,24 @@
+# Grafana 仪表盘每日快照服务配置
+
+[grafana]
+# Grafana 服务地址（不含尾部斜杠）
+base_url = "https://samonitor.wsgjp.com"
+# API Token（Grafana Service Account Token，需自行创建）
+api_token = ""
+# 目标仪表盘 UID
+dashboard_uid = "a817e03f-2eb1-4c62-a6d7-4ddad1d7c945"
+# 组织 ID
+org_id = 1
+
+[schedule]
+# cron 表达式（需安装 croniter，否则回退到 run_hour）
+# 每天 09:00 执行
+cron = "0 9 * * *"
+# 回退调度：每日指定小时整点执行（croniter 未安装时生效）
+run_hour = 9
+
+[snapshot]
+# 快照名称前缀，最终格式为 "{name_prefix} {YYYY-MM-DD}"
+name_prefix = "Grafana 仪表盘快照"
+# 快照过期时间（秒），0 表示永不过期
+expires = 0
