@@ -20,6 +20,7 @@ dependencies = [
     "pymysql>=1.1",
     "certifi",
     "packaging>=23.0",
+    "openpyxl>=3.1",
     "alibabacloud-eiam20211201>=2.0",
 ]
 
