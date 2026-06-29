@@ -14,7 +14,7 @@ croniter 未安装时回退到 run_hour 整点调度（每日指定小时执行�
 """
 import logging
 import time
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -67,23 +67,27 @@ def _next_run_timestamp(schedule_cfg, after=None):
 
 
 def _yesterday_time_range():
-    """计算昨天整天的毫秒级 Unix 时间戳范围（本地时区）。
+    """计算昨天整天的时间范围，格式为 Grafana 绝对时间 ISO 8601 UTC。
 
-    时间范围为昨天 00:00:01 到 23:59:59（含秒，不含毫秒）。
+    时间范围为昨天 00:00:00 到 23:59:59（本地时区），转换为 UTC ISO 格式。
+    例如本地 2026-06-28 00:00:00 CST → 2026-06-27T16:00:00.000Z
 
     Returns:
-        tuple: (from_ms, to_ms, yesterday_str)
-            from_ms: 昨天 00:00:01 的毫秒时间戳字符串
-            to_ms: 昨天 23:59:59 的毫秒时间戳字符串
+        tuple: (from_iso, to_iso, yesterday_str)
+            from_iso: 昨天 00:00:00 的 UTC ISO 字符串（含毫秒和Z后缀）
+            to_iso: 昨天 23:59:59 的 UTC ISO 字符串
             yesterday_str: 昨天日期字符串，格式 YYYY-MM-DD
     """
     today = datetime.now().date()
     yesterday = today - timedelta(days=1)
-    start = datetime.combine(yesterday, dtime(0, 0, 1))  # 昨天 00:00:01
-    end = datetime.combine(yesterday, dtime(23, 59, 59))  # 昨天 23:59:59
-    from_ms = str(int(start.timestamp() * 1000))
-    to_ms = str(int(end.timestamp() * 1000))
-    return from_ms, to_ms, yesterday.strftime("%Y-%m-%d")
+    start_local = datetime.combine(yesterday, dtime(0, 0, 0))  # 昨天 00:00:00 本地
+    end_local = datetime.combine(yesterday, dtime(23, 59, 59))  # 昨天 23:59:59 本地
+    # 转换为 UTC ISO 8601 格式
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+    from_iso = start_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    to_iso = end_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return from_iso, to_iso, yesterday.strftime("%Y-%m-%d")
 
 
 def _fetch_dashboard(http_mod, base_url, api_token, dashboard_uid, org_id=1):
@@ -128,8 +132,8 @@ def _fetch_dashboard(http_mod, base_url, api_token, dashboard_uid, org_id=1):
 def _create_snapshot(http_mod, base_url, api_token, dashboard, name, expires=0, org_id=1):
     """创建 Grafana 仪表盘快照。
 
-    将 dashboard.time 设为相对时间表达式 now-1d/d 后，调用 POST /api/snapshots。
-    时间范围使用 Grafana 相对表达式，与原始仪表盘 URL 参数一致。
+    将 dashboard.time 设为 ISO 8601 UTC 绝对时间后，调用 POST /api/snapshots。
+    时间范围固定为昨天 00:00:00 ~ 23:59:59（本地时区转 UTC），确保快照时间不随查看时间漂移。
 
     Args:
         http_mod: http-client 模块实例。
@@ -143,8 +147,9 @@ def _create_snapshot(http_mod, base_url, api_token, dashboard, name, expires=0, 
     Returns:
         dict or None: 快照响应 {"key", "url", "deleteKey", "deleteUrl"}，失败返回 None。
     """
-    # 使用 Grafana 相对时间表达式，与原始仪表盘 URL 参数一致
-    dashboard["time"] = {"from": "now-1d/d", "to": "now-1d/d"}
+    # 使用 ISO 8601 UTC 绝对时间，确保快照时间范围固定
+    from_iso, to_iso, _ = _yesterday_time_range()
+    dashboard["time"] = {"from": from_iso, "to": to_iso}
     # 设置时区为 browser，使 Grafana 按查看者浏览器时区显示时间范围
     dashboard["timezone"] = "browser"
 
