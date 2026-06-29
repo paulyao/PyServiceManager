@@ -146,6 +146,8 @@ def _create_snapshot(http_mod, base_url, api_token, dashboard, name, expires=0, 
     from_ms, to_ms, _ = _yesterday_time_range()
     # 固定时间范围，防止快照时间随当前时间漂移
     dashboard["time"] = {"from": from_ms, "to": to_ms}
+    # 设置时区为 browser，使 Grafana 按查看者浏览器时区显示时间范围
+    dashboard["timezone"] = "browser"
 
     # post() 不支持 params，orgId 拼接到 URL
     url = f"{base_url.rstrip('/')}/api/snapshots"
