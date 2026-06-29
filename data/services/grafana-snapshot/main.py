@@ -128,8 +128,8 @@ def _fetch_dashboard(http_mod, base_url, api_token, dashboard_uid, org_id=1):
 def _create_snapshot(http_mod, base_url, api_token, dashboard, name, expires=0, org_id=1):
     """创建 Grafana 仪表盘快照。
 
-    将昨天的绝对时间戳写入 dashboard.time 字段后，调用 POST /api/snapshots。
-    时间范围固定为昨天 00:00:00.000 ~ 23:59:59.999，确保快照不随时间漂移。
+    将 dashboard.time 设为相对时间表达式 now-1d/d 后，调用 POST /api/snapshots。
+    时间范围使用 Grafana 相对表达式，与原始仪表盘 URL 参数一致。
 
     Args:
         http_mod: http-client 模块实例。
@@ -143,9 +143,8 @@ def _create_snapshot(http_mod, base_url, api_token, dashboard, name, expires=0, 
     Returns:
         dict or None: 快照响应 {"key", "url", "deleteKey", "deleteUrl"}，失败返回 None。
     """
-    from_ms, to_ms, _ = _yesterday_time_range()
-    # 固定时间范围，防止快照时间随当前时间漂移
-    dashboard["time"] = {"from": from_ms, "to": to_ms}
+    # 使用 Grafana 相对时间表达式，与原始仪表盘 URL 参数一致
+    dashboard["time"] = {"from": "now-1d/d", "to": "now-1d/d"}
     # 设置时区为 browser，使 Grafana 按查看者浏览器时区显示时间范围
     dashboard["timezone"] = "browser"
 
