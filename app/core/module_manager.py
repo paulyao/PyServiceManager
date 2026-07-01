@@ -42,6 +42,7 @@ class ModuleManager:
         "http-client": ["certifi"],
         "idaas-eiam": ["alibabacloud-eiam20211201>=2.0"],
         "web-service": [],
+        "sqlite-helper": [],
     }
 
     @staticmethod
