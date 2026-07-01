@@ -185,15 +185,20 @@ class DaemonHandler(BaseHTTPRequestHandler):
         """代理请求到服务的回调服务器。"""
         import urllib.request
         import urllib.error
+        from urllib.parse import urlparse, parse_qs
 
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
 
         payload = json.dumps({
             "method": method,
             "path": path,
             "headers": dict(self.headers),
             "body": body.decode("utf-8", errors="replace") if body else "",
+            "query": query,
         }).encode("utf-8")
 
         try:
