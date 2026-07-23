@@ -63,6 +63,9 @@ const api = {
     getServiceModules: (name) => request('GET', `/modules/service/${name}`),
     updateServiceModules: (name, modules) => request('PUT', `/modules/service/${name}`, { modules }),
 
+    // Web-enabled services (services with web-service module)
+    getWebEnabledServices: () => request('GET', '/services/web-enabled'),
+
     // Modules
     listModules: () => request('GET', '/modules'),
     getModule: (name) => request('GET', `/modules/${name}`),

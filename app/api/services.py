@@ -1,11 +1,12 @@
 """Service management API routes."""
+import tomllib
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import SERVICES_DIR
+from app.config import SERVICES_DIR, MODULES_DIR, DATA_DIR
 from app.database import get_session
 from app.models.service import Service
 from app.models.module import Module
@@ -49,6 +50,45 @@ async def create_service(data: ServiceCreate, session: AsyncSession = Depends(ge
     except ServiceManagerError as e:
         detail_msg = f"{str(e)}: {e.detail}" if hasattr(e, 'detail') else str(e)
         raise HTTPException(status_code=400, detail=detail_msg)
+
+
+@router.get("/web-enabled")
+async def get_web_enabled_services(session: AsyncSession = Depends(get_session)):
+    """Return services with web-service module enabled and the daemon port."""
+    mod_result = await session.execute(select(Module).where(Module.name == "web-service"))
+    module = mod_result.scalar_one_or_none()
+
+    port = 8910  # default
+    service_names = []
+
+    if module:
+        # Read port from module config.toml
+        config_path = None
+        if module.config_path:
+            p = Path(module.config_path)
+            config_path = p if p.is_absolute() else DATA_DIR.parent / p
+        else:
+            config_path = MODULES_DIR / "web-service" / "config.toml"
+
+        if config_path.exists():
+            try:
+                config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+                port = config_data.get("server", {}).get("port", 8910)
+            except Exception:
+                pass
+
+        # Find services with web-service module enabled
+        sm_result = await session.execute(
+            select(Service.name)
+            .join(ServiceModule, Service.id == ServiceModule.service_id)
+            .where(
+                ServiceModule.module_id == module.id,
+                ServiceModule.enabled == True,  # noqa: E712
+            )
+        )
+        service_names = [r[0] for r in sm_result.all()]
+
+    return {"services": service_names, "port": port}
 
 
 @router.get("/{name}", response_model=ServiceResponse)

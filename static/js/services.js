@@ -1,12 +1,18 @@
 /** 服务列表页和服务详情页 */
 let statusRefreshTimer = null;
+let webEnabledInfo = { services: [], port: 8910 };
 
 async function renderServicesPage() {
     const main = document.getElementById('main-content');
     updateNav('services');
 
     try {
-        const services = await api.listServices();
+        const [services, webInfo] = await Promise.all([
+            api.listServices(),
+            api.getWebEnabledServices().catch(() => ({ services: [], port: 8910 })),
+        ]);
+        webEnabledInfo = webInfo;
+        const webSet = new Set(webInfo.services);
         main.innerHTML = `
             <div class="page-header">
                 <div>
@@ -22,7 +28,7 @@ async function renderServicesPage() {
                         <div class="title">暂无服务</div>
                         <p>创建你的第一个服务来开始使用</p>
                     </div>
-                ` : services.map(s => renderServiceCard(s)).join('')}
+                ` : services.map(s => renderServiceCard(s, webSet)).join('')}
             </div>
         `;
     } catch (e) {
@@ -35,12 +41,14 @@ async function renderServicesPage() {
     currentCleanup = () => { if (statusRefreshTimer) clearInterval(statusRefreshTimer); };
 }
 
-function renderServiceCard(s) {
+function renderServiceCard(s, webSet) {
     const badgeClass = s.status === 'running' ? 'badge-running' :
                        s.status === 'failed' ? 'badge-failed' :
                        s.status === 'stopped' ? 'badge-stopped' : 'badge-unknown';
     const statusDot = s.status === 'running' ? '🟢' : s.status === 'failed' ? '🟠' : '⚪';
     const statusText = s.status === 'running' ? '运行中' : s.status === 'failed' ? '已失败' : s.status === 'stopped' ? '已停止' : s.status;
+    const hasWeb = webSet && webSet.has(s.name);
+    const webBtn = hasWeb ? `<button class="btn btn-outline btn-sm" onclick="openServiceWeb('${s.name}')" title="打开 Web 页面">🌐 Web</button>` : '';
 
     return `
         <div class="card" data-service="${s.name}">
@@ -55,11 +63,18 @@ function renderServiceCard(s) {
                      <button class="btn btn-outline btn-sm" onclick="restartService('${s.name}')">↻ 重启</button>` :
                     `<button class="btn btn-success btn-sm" onclick="startService('${s.name}')">▶ 启动</button>`
                 }
+                ${webBtn}
                 <button class="btn btn-outline btn-sm" onclick="navigate('services/${s.name}')">详情</button>
                 <button class="btn btn-outline btn-sm btn-icon" onclick="deleteService('${s.name}')" title="删除">🗑️</button>
             </div>
         </div>
     `;
+}
+
+function openServiceWeb(name) {
+    const port = webEnabledInfo.port || 8910;
+    const url = `http://${location.hostname}:${port}/${name}/`;
+    window.open(url, '_blank');
 }
 
 async function refreshServiceStatuses() {
