@@ -318,15 +318,17 @@ function sortUsage(field) {
 
 function renderUsageStats(org, statsId) {
   const data = usageData ? (usageData[org] || {}) : {};
-  const members = data.members || [];
+  const rawMembers = data.members || [];
+  // 与 renderUsageOrg 一致：总计 = Plan + 共享
+  const members = rawMembers.map(m => {
+    const totalUsed = (m.planUsed||0) + (m.sharedUsed||0);
+    const totalLimit = (m.planLimit||0) + (m.sharedLimit||0);
+    return { ...m, totalUsed, totalLimit, usageRate: totalLimit > 0 ? (totalUsed / totalLimit * 100) : 0 };
+  });
   const totalMembers = members.length;
   const exhausted = members.filter(m => m.status === 'restricted').length;
-  const lowUsage = members.filter(m => {
-    const u = (m.planUsed||0) + (m.sharedUsed||0);
-    const l = (m.planLimit||0) + (m.sharedLimit||0);
-    return l > 0 && (u/l*100) < 50;
-  }).length;
-  const unused = members.filter(m => ((m.planUsed||0) + (m.sharedUsed||0)) === 0).length;
+  const lowUsage = members.filter(m => m.totalLimit > 0 && m.usageRate < 50).length;
+  const unused = members.filter(m => m.totalUsed === 0).length;
   document.getElementById(statsId).innerHTML =
     '<div class="stat-card"><div class="label">总成员</div><div class="value">' + totalMembers + ' 人</div></div>' +
     '<div class="stat-card"><div class="label">配额耗尽</div><div class="value danger">' + exhausted + ' 人</div></div>' +
