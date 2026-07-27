@@ -144,6 +144,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
   <div id="tab-usage" style="display:none">
     <div class="updated" id="usage-updated">加载中...</div>
     <h2>Qoder 国际版</h2>
+    <div class="stats" id="usage-stats-qoder"></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -164,6 +165,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
       </table>
     </div>
     <h2>Qoder CN</h2>
+    <div class="stats" id="usage-stats-cn"></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -303,6 +305,8 @@ async function fetchUsage() {
     document.getElementById('usage-updated').textContent = d.last_updated ? '上次更新: ' + d.last_updated : '尚未采集';
     renderUsageOrg('qoder', 'usage-tbody');
     renderUsageOrg('qoder_cn', 'usage-tbody-cn');
+    renderUsageStats('qoder', 'usage-stats-qoder');
+    renderUsageStats('qoder_cn', 'usage-stats-cn');
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
@@ -314,6 +318,20 @@ function sortUsage(field) {
   if (field === usageSortField) { usageSortAsc = !usageSortAsc; } else { usageSortField = field; usageSortAsc = false; }
   renderUsageOrg('qoder', 'usage-tbody');
   renderUsageOrg('qoder_cn', 'usage-tbody-cn');
+}
+
+function renderUsageStats(org, statsId) {
+  const data = usageData ? (usageData[org] || {}) : {};
+  const members = data.members || [];
+  const totalMembers = members.length;
+  const exhausted = members.filter(m => m.status === 'restricted').length;
+  const lowUsage = members.filter(m => { const l = m.totalLimit||0, u = m.totalUsed||0; return l > 0 && (u/l*100) < 50; }).length;
+  const unused = members.filter(m => (m.totalUsed||0) === 0).length;
+  document.getElementById(statsId).innerHTML =
+    '<div class="stat-card"><div class="label">总成员</div><div class="value">' + totalMembers + ' 人</div></div>' +
+    '<div class="stat-card"><div class="label">配额耗尽</div><div class="value danger">' + exhausted + ' 人</div></div>' +
+    '<div class="stat-card"><div class="label">用量&lt;50%</div><div class="value green">' + lowUsage + ' 人</div></div>' +
+    '<div class="stat-card"><div class="label">未使用</div><div class="value muted">' + unused + ' 人</div></div>';
 }
 
 function renderUsageOrg(org, tbodyId) {
