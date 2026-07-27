@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qoder 账号管理</title>
+<style>
+:root {
+  --bg: #f0f2f5; --card: #ffffff; --border: #e2e8f0; --text: #0f172a;
+  --text2: #64748b; --text3: #94a3b8;
+  --green: #10b981; --yellow: #f59e0b; --red: #ef4444;
+  --blue: #3b82f6; --blue-light: #60a5fa; --blue-dark: #2563eb;
+  --radius: 10px; --shadow: 0 1px 3px rgba(0,0,0,0.08); --shadow-hover: 0 4px 12px rgba(0,0,0,0.12);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6; padding: 24px; }
+.container { max-width: 1280px; margin: 0 auto; }
+h1 { font-size: 26px; font-weight: 700; margin-bottom: 20px; letter-spacing: -0.5px; }
+h2 { font-size: 18px; font-weight: 700; margin: 24px 0 12px; }
+.stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 24px; min-width: 150px; box-shadow: var(--shadow); transition: box-shadow 0.2s; }
+.stat-card:hover { box-shadow: var(--shadow-hover); }
+.stat-card .label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+.stat-card .value { font-size: 32px; font-weight: 800; margin-top: 4px; letter-spacing: -1px; }
+.stat-card .value.danger { color: var(--red); }
+.stat-card .value.green { color: var(--green); }
+.stat-card .value.muted { color: var(--text3); }
+.search-box { width: 100%; padding: 10px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 14px; margin-bottom: 16px; outline: none; transition: border-color 0.2s, box-shadow 0.2s; background: var(--card); }
+.search-box:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+.table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; box-shadow: var(--shadow); margin-bottom: 24px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead { background: #f8fafc; }
+th { padding: 12px 16px; text-align: left; font-weight: 600; font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2);
+  border-bottom: 2px solid var(--border); }
+td { padding: 12px 16px; border-bottom: 1px solid #f1f5f9; }
+tr:last-child td { border-bottom: none; }
+tbody tr { transition: background 0.15s; }
+tr:hover { background: #f8fafc; }
+.bar-wrap { width: 120px; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden;
+  display: inline-block; vertical-align: middle; margin-right: 8px; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+.bar-fill.green { background: linear-gradient(90deg, #10b981, #34d399); }
+.bar-fill.yellow { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.bar-fill.red { background: linear-gradient(90deg, #ef4444, #f87171); }
+.badge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.badge.active { background: #d1fae5; color: #065f46; }
+.badge.restricted { background: #fee2e2; color: #991b1b; }
+.badge.other { background: #f1f5f9; color: #475569; }
+.badge.diff { background: #fef3c7; color: #92400e; }
+.badge.missing { background: #fee2e2; color: #991b1b; }
+.empty-state { text-align: center; padding: 60px 20px; color: var(--text3); }
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+.updated { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
+.name-cell { font-weight: 600; color: var(--text); }
+.email-cell { color: var(--text2); font-size: 13px; }
+.search-row { display: flex; gap: 12px; margin-bottom: 16px; }
+.search-row .search-box { margin-bottom: 0; }
+.tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 2px solid var(--border); }
+.tab { padding: 10px 24px; border: none; background: none; cursor: pointer; font-size: 14px;
+  color: var(--text2); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.2s;
+  font-weight: 500; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 700; }
+th.sortable { cursor: pointer; user-select: none; transition: color 0.15s; }
+th.sortable:hover { color: var(--blue); }
+th.sort-asc::after { content: ' ▲'; font-size: 10px; color: var(--blue); }
+th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
+.ai-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.period-selector { display: flex; gap: 8px; }
+.period-btn { padding: 8px 20px; border: 1px solid var(--border); background: var(--card);
+  border-radius: var(--radius); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+.period-btn:hover { border-color: var(--blue-light); color: var(--blue); }
+.period-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); box-shadow: 0 2px 6px rgba(59,130,246,0.3); }
+.branch-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; font-weight: 500; }
+.branch-toggle input { width: 16px; height: 16px; accent-color: var(--blue); cursor: pointer; }
+.chart-area { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; margin-bottom: 24px; box-shadow: var(--shadow); }
+.chart-title { font-size: 14px; font-weight: 700; margin-bottom: 16px; color: var(--text); }
+.chart-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.chart-tab { padding: 8px 16px; border: 1px solid var(--border); background: var(--card);
+  border-radius: var(--radius); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+.chart-tab:hover { border-color: var(--blue-light); color: var(--blue); }
+.chart-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); box-shadow: 0 2px 6px rgba(59,130,246,0.3); }
+.bar-chart { display: flex; align-items: flex-end; gap: 3px; height: 220px; overflow-x: auto; padding-top: 24px; }
+.bar-item { flex: 1; min-width: 28px; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; position: relative; }
+.bar { width: 100%; max-width: 52px; border-radius: 4px 4px 0 0; min-height: 3px; transition: height 0.4s ease, opacity 0.2s, transform 0.2s; cursor: pointer; }
+.bar:hover { opacity: 0.85; transform: scaleY(1.02); transform-origin: bottom; }
+.bar-value { font-size: 11px; color: var(--text); font-weight: 700; margin-bottom: 4px; white-space: nowrap; }
+.bar.green { background: linear-gradient(180deg, #34d399, #10b981); }
+.bar.yellow { background: linear-gradient(180deg, #fbbf24, #f59e0b); }
+.bar.red { background: linear-gradient(180deg, #f87171, #ef4444); }
+.bar-label { font-size: 10px; color: var(--text3); margin-top: 6px; white-space: nowrap; }
+.pkg-section { margin-bottom: 24px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Qoder 账号管理</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('accounts')">Qoder 账号</button>
+    <button class="tab" onclick="switchTab('accounts-cn')">Qoder CN 账号</button>
+    <button class="tab" onclick="switchTab('usage')">用量监控</button>
+    <button class="tab" onclick="switchTab('ai-code')">AI 代码统计</button>
+  </div>
+
+  <!-- Tab 1: Qoder 账号 -->
+  <div id="tab-accounts">
+    <div class="updated" id="acc-updated">加载中...</div>
+    <div class="search-row">
+      <input class="search-box" id="acc-search" type="text" placeholder="搜索邮箱...">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>邮箱</th><th>姓名</th><th>部门</th><th>差异</th>
+        </tr></thead>
+        <tbody id="acc-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tab 2: Qoder CN 账号 -->
+  <div id="tab-accounts-cn" style="display:none">
+    <div class="updated" id="cn-updated">加载中...</div>
+    <div class="search-row">
+      <input class="search-box" id="cn-search" type="text" placeholder="搜索邮箱...">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>邮箱</th><th>姓名</th><th>部门</th><th>差异</th>
+        </tr></thead>
+        <tbody id="cn-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tab 3: 用量监控 -->
+  <div id="tab-usage" style="display:none">
+    <div class="updated" id="usage-updated">加载中...</div>
+    <h2>Qoder 国际版</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>共享额度</th><th>共享使用量</th><th>使用率</th><th>状态</th>
+        </tr></thead>
+        <tbody id="usage-tbody"></tbody>
+      </table>
+    </div>
+    <h2>Qoder CN</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>共享额度</th><th>共享使用量</th><th>使用率</th><th>状态</th>
+        </tr></thead>
+        <tbody id="usage-tbody-cn"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tab 4: AI 代码统计 -->
+  <div id="tab-ai-code" style="display:none">
+    <div class="ai-controls">
+      <div class="period-selector">
+        <button class="period-btn active" onclick="switchPeriod(7)">7天</button>
+        <button class="period-btn" onclick="switchPeriod(30)">30天</button>
+      </div>
+      <label class="branch-toggle">
+        <input type="checkbox" id="primary-only" onchange="onPrimaryBranchChange()">
+        只看主分支
+      </label>
+    </div>
+    <div class="chart-area">
+      <div class="chart-tabs">
+        <button class="chart-tab active" onclick="switchChart('share')">AI代码占比趋势</button>
+        <button class="chart-tab" onclick="switchChart('accept')">Tab补全接受率趋势</button>
+        <button class="chart-tab" onclick="switchChart('lines')">Agent生成采纳行趋势</button>
+      </div>
+      <div class="bar-chart" id="trend-chart"><div class="empty-state">加载中...</div></div>
+    </div>
+    <div class="updated" id="ai-updated">加载中...</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th class="sortable" onclick="sortAI('name')">姓名</th>
+          <th class="sortable" onclick="sortAI('email')">邮箱</th>
+          <th class="sortable" onclick="sortAI('commit_count')">提交次数</th>
+          <th class="sortable" onclick="sortAI('total_added')">总新增行数</th>
+          <th class="sortable" onclick="sortAI('total_deleted')">总删除行数</th>
+          <th class="sortable" onclick="sortAI('ai_added')">AI新增行数</th>
+          <th class="sortable" onclick="sortAI('ai_deleted')">AI删除行数</th>
+          <th class="sortable" onclick="sortAI('non_ai_added')">非AI新增行数</th>
+          <th class="sortable" onclick="sortAI('ide_total')">IDE新增行数</th>
+          <th class="sortable" onclick="sortAI('plugin_total')">JB插件新增行数</th>
+          <th class="sortable" onclick="sortAI('cli_agent_added')">CLI Agent新增</th>
+          <th class="sortable" onclick="sortAI('ai_rate')">AI代码占比</th>
+        </tr></thead>
+        <tbody id="ai-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+const base = window.location.pathname.endsWith('/')
+  ? window.location.pathname
+  : window.location.pathname + '/';
+let activeTab = 'accounts';
+let accountData = {qoder: [], qoder_cn: []};
+let usageData = null;
+let refreshMs = 60000;
+let timer = null;
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function fmt(n) { return typeof n === 'number' ? (Number.isInteger(n) ? n.toString() : n.toFixed(2)) : n; }
+function barClass(pct) { return pct >= 80 ? 'red' : pct >= 60 ? 'yellow' : 'green'; }
+
+function switchTab(name) {
+  activeTab = name;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  ['accounts','accounts-cn','usage','ai-code'].forEach(id => {
+    document.getElementById('tab-' + id).style.display = id === name ? '' : 'none';
+  });
+  if (name === 'accounts' || name === 'accounts-cn') fetchAccounts();
+  if (name === 'usage') fetchUsage();
+  if (name === 'ai-code') { fetchAICodeData(); fetchTrendData(); }
+}
+
+// ── 账号列表 ──
+async function fetchAccounts() {
+  try {
+    const r = await fetch(base + 'api/accounts', {method: 'POST'});
+    const d = await r.json();
+    accountData = d;
+    renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search');
+    renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search');
+  } catch(e) { console.error('accounts fetch error:', e); }
+}
+
+function renderAccounts(org, tbodyId, updatedId, searchId) {
+  const data = accountData[org] || {};
+  const members = (data.members || []).filter(m => m.name);
+  const summary = data.summary || {};
+  const q = document.getElementById(searchId) ? document.getElementById(searchId).value.toLowerCase() : '';
+  const filtered = members.filter(m => !q || m.email.toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q));
+
+  document.getElementById(updatedId).textContent = summary.last_updated ? '上次更新: ' + summary.last_updated : '尚未采集';
+
+  if (!filtered.length) {
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="4" class="empty-state">无匹配账号</td></tr>';
+    return;
+  }
+  const rows = filtered.map(m => {
+    let diffBadge = '';
+    if (m.diff === '名称不一致') diffBadge = '<span class="badge diff">名称不一致</span>';
+    else if (m.diff === 'API无此账号') diffBadge = '<span class="badge missing">API无此账号</span>';
+    return '<tr>' +
+      '<td class="email-cell">' + esc(m.email) + '</td>' +
+      '<td class="name-cell">' + esc(m.name) + '</td>' +
+      '<td>' + esc(m.department || '-') + '</td>' +
+      '<td>' + diffBadge + '</td></tr>';
+  });
+  document.getElementById(tbodyId).innerHTML = rows.join('');
+}
+
+function renderPackages(packages, summary) {
+  const totalLimit = summary.packageTotalLimit || 0;
+  const totalUsed = summary.packageTotalUsed || 0;
+  const usageRate = summary.packageUsageRate || 0;
+  const bc = barClass(usageRate);
+  let html = '<div class="stats">' +
+    '<div class="stat-card"><div class="label">总额度</div><div class="value">' + fmt(totalLimit) + '</div></div>' +
+    '<div class="stat-card"><div class="label">已用</div><div class="value">' + fmt(totalUsed) + '</div></div>' +
+    '<div class="stat-card"><div class="label">使用率</div><div class="value ' + (bc==='green'?'green':bc==='red'?'danger':'') + '">' + usageRate.toFixed(1) + '%</div></div>' +
+    '</div>';
+  return html;
+}
+
+// ── 用量监控 ──
+async function fetchUsage() {
+  try {
+    const r = await fetch(base + 'api/usage', {method: 'POST'});
+    const d = await r.json();
+    usageData = d;
+    document.getElementById('usage-updated').textContent = d.last_updated ? '上次更新: ' + d.last_updated : '尚未采集';
+    renderUsageOrg('qoder', 'usage-tbody');
+    renderUsageOrg('qoder_cn', 'usage-tbody-cn');
+  } catch(e) { console.error('usage fetch error:', e); }
+}
+
+function renderUsageOrg(org, tbodyId) {
+  const data = usageData ? (usageData[org] || {}) : {};
+  const members = data.members || [];
+  const summary = data.summary || {};
+  const sharedLimit = summary.packageTotalLimit || 0;
+  const sharedUsed = summary.packageTotalUsed || 0;
+
+  if (!members.length) {
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="8" class="empty-state">暂无数据</td></tr>';
+    return;
+  }
+  const rows = members.map(m => {
+    const limit = m.limitValue || 0;
+    const used = m.usedValue || 0;
+    const pct = limit > 0 ? (used / limit * 100) : 0;
+    const bc = barClass(pct);
+    const badge = m.status === 'restricted' ? '<span class="badge restricted">restricted</span>'
+      : m.status === 'active' ? '<span class="badge active">active</span>'
+      : '<span class="badge other">' + esc(m.status||'unknown') + '</span>';
+    return '<tr>' +
+      '<td class="email-cell">' + esc(m.email) + '</td>' +
+      '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
+      '<td>' + fmt(used) + '</td>' +
+      '<td>' + fmt(limit) + '</td>' +
+      '<td>' + fmt(sharedLimit) + '</td>' +
+      '<td>' + fmt(sharedUsed) + '</td>' +
+      '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
+      '<td>' + badge + '</td></tr>';
+  });
+  document.getElementById(tbodyId).innerHTML = rows.join('');
+}
+
+document.getElementById('acc-search').addEventListener('input', () => renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search'));
+document.getElementById('cn-search').addEventListener('input', () => renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search'));
+
+// ── AI 代码统计 ──
+let aiMembers = [];
+let aiSortField = 'ai_added';
+let aiSortAsc = false;
+let aiTimer = null;
+let trendDays = 7;
+let primaryOnly = false;
+let chartType = 'share';
+let trendItems = [];
+let trendNextItems = [];
+
+function switchPeriod(days) {
+  trendDays = days;
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  fetchTrendData();
+  fetchAICodeData();
+}
+
+function onPrimaryBranchChange() {
+  primaryOnly = document.getElementById('primary-only').checked;
+  fetchTrendData();
+  fetchAICodeData();
+}
+
+function switchChart(type) {
+  chartType = type;
+  document.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  renderTrendChart();
+}
+
+async function fetchTrendData() {
+  try {
+    const params = new URLSearchParams({days: trendDays, primary_branch_only: primaryOnly});
+    const r = await fetch(base + 'api/ai-code-trend?' + params, {method: 'POST'});
+    const d = await r.json();
+    trendItems = d.items || [];
+    trendNextItems = d.nextItems || [];
+    renderTrendChart();
+  } catch(e) { console.error('trend fetch error:', e); }
+}
+
+function renderTrendChart() {
+  const container = document.getElementById('trend-chart');
+  if (chartType === 'share') {
+    if (!trendItems.length) { container.innerHTML = '<div class="empty-state">暂无趋势数据</div>'; return; }
+    const maxRate = Math.max(...trendItems.map(i => i.aiShareRate || 0), 100);
+    container.innerHTML = trendItems.map(item => {
+      const rate = item.aiShareRate || 0;
+      const h = (rate / maxRate * 100);
+      const cls = rate >= 50 ? 'green' : rate >= 20 ? 'yellow' : 'red';
+      const date = item.date ? item.date.substring(5, 10) : '';
+      const commits = item.commitCount || 0;
+      return '<div class="bar-item"><div class="bar-value">' + rate.toFixed(1) + '%</div><div class="bar ' + cls + '" style="height:' + h + '%" title="' + date + ' | AI占比: ' + rate.toFixed(1) + '% | 提交: ' + commits + '"></div><div class="bar-label">' + date + '</div></div>';
+    }).join('');
+  } else if (chartType === 'accept') {
+    if (!trendNextItems.length) { container.innerHTML = '<div class="empty-state">暂无趋势数据</div>'; return; }
+    const maxRate = Math.max(...trendNextItems.map(i => i.nextAcceptRate || 0), 100);
+    container.innerHTML = trendNextItems.map(item => {
+      const rate = item.nextAcceptRate || 0;
+      const h = (rate / maxRate * 100);
+      const cls = rate >= 50 ? 'green' : rate >= 20 ? 'yellow' : 'red';
+      const date = item.date ? item.date.substring(5, 10) : '';
+      const suggested = item.nextSuggestedCount || 0;
+      const accepted = item.nextAcceptedCount || 0;
+      return '<div class="bar-item"><div class="bar-value">' + rate.toFixed(1) + '%</div><div class="bar ' + cls + '" style="height:' + h + '%" title="' + date + ' | 接受率: ' + rate.toFixed(1) + '% | 接受: ' + accepted + ' | 建议: ' + suggested + '"></div><div class="bar-label">' + date + '</div></div>';
+    }).join('');
+  } else if (chartType === 'lines') {
+    if (!trendItems.length) { container.innerHTML = '<div class="empty-state">暂无趋势数据</div>'; return; }
+    const maxLines = Math.max(...trendItems.map(i => i.aiLinesAdded || 0), 1);
+    container.innerHTML = trendItems.map(item => {
+      const lines = item.aiLinesAdded || 0;
+      const h = (lines / maxLines * 100);
+      const date = item.date ? item.date.substring(5, 10) : '';
+      return '<div class="bar-item"><div class="bar-value">' + lines + '</div><div class="bar" style="height:' + h + '%;background:var(--blue)" title="' + date + ' | AI行数: ' + lines + '"></div><div class="bar-label">' + date + '</div></div>';
+    }).join('');
+  }
+}
+
+async function fetchAICodeData() {
+  try {
+    const params = new URLSearchParams({days: trendDays, primary_branch_only: primaryOnly});
+    const r = await fetch(base + 'api/ai-code?' + params, {method: 'POST'});
+    const d = await r.json();
+    const data = d.data || d;
+    if (!data.last_updated) {
+      document.getElementById('ai-tbody').innerHTML = '<tr><td colspan="12" class="empty-state"><div class="icon">⏳</div>数据尚未采集，请等待首次采集完成</td></tr>';
+      document.getElementById('ai-updated').textContent = '尚未采集';
+      return;
+    }
+    aiMembers = (data.members || []).map(m => {
+      m.ide_total = (m.ide_next_added||0) + (m.ide_agent_added||0) + (m.ide_quest_added||0);
+      m.plugin_total = (m.plugin_next_added||0) + (m.plugin_agent_added||0) + (m.jb_inline_chat_added||0);
+      return m;
+    });
+    document.getElementById('ai-updated').textContent = '上次更新: ' + data.last_updated;
+    renderAITable();
+  } catch(e) { console.error('AI code fetch error:', e); }
+}
+
+function renderAITable() {
+  const sorted = [...aiMembers].sort((a, b) => {
+    const av = a[aiSortField]; const bv = b[aiSortField];
+    if (typeof av === 'string') return aiSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return aiSortAsc ? (av || 0) - (bv || 0) : (bv || 0) - (av || 0);
+  });
+  if (!sorted.length) {
+    document.getElementById('ai-tbody').innerHTML = '<tr><td colspan="12" class="empty-state">暂无数据</td></tr>';
+    return;
+  }
+  const rows = sorted.map(m => {
+    const aiRate = m.ai_rate != null ? m.ai_rate.toFixed(1) + '%' : '-';
+    const ideTotal = (m.ide_next_added||0) + (m.ide_agent_added||0) + (m.ide_quest_added||0);
+    const pluginTotal = (m.plugin_next_added||0) + (m.plugin_agent_added||0) + (m.jb_inline_chat_added||0);
+    return '<tr>' +
+      '<td class="name-cell">' + esc(m.name || m.email || '-') + '</td>' +
+      '<td class="email-cell">' + esc(m.email || '-') + '</td>' +
+      '<td>' + (m.commit_count || 0) + '</td>' +
+      '<td>' + (m.total_added || 0) + '</td>' +
+      '<td>' + (m.total_deleted || 0) + '</td>' +
+      '<td>' + (m.ai_added || 0) + '</td>' +
+      '<td>' + (m.ai_deleted || 0) + '</td>' +
+      '<td>' + (m.non_ai_added || 0) + '</td>' +
+      '<td>' + ideTotal + '</td>' +
+      '<td>' + pluginTotal + '</td>' +
+      '<td>' + (m.cli_agent_added || 0) + '</td>' +
+      '<td>' + aiRate + '</td></tr>';
+  });
+  document.getElementById('ai-tbody').innerHTML = rows.join('');
+  document.querySelectorAll('#tab-ai-code th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const field = th.getAttribute('onclick').match(/'([^']+)'/)[1];
+    if (field === aiSortField) th.classList.add(aiSortAsc ? 'sort-asc' : 'sort-desc');
+  });
+}
+
+function sortAI(field) {
+  if (field === aiSortField) { aiSortAsc = !aiSortAsc; } else { aiSortField = field; aiSortAsc = false; }
+  renderAITable();
+}
+
+// ── 自动刷新 ──
+function restartTimer() { if (timer) clearInterval(timer); timer = setInterval(() => {
+  if (activeTab === 'accounts' || activeTab === 'accounts-cn') fetchAccounts();
+  else if (activeTab === 'usage') fetchUsage();
+  else if (activeTab === 'ai-code') fetchAICodeData();
+}, refreshMs); }
+
+fetchAccounts();
+restartTimer();
+</script>
+</body>
+</html>
