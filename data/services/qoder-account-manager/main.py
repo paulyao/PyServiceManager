@@ -134,16 +134,6 @@ def run(config, modules):
             email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '', updated_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS qoder_cn_accounts (
             email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '', updated_at TEXT)""", commit=True)
-        sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS resource_packages (
-            pkg_id TEXT PRIMARY KEY, name TEXT, source TEXT, status TEXT,
-            activated_at TEXT, expires_at TEXT,
-            limit_value REAL, used_value REAL, remaining_value REAL,
-            unit TEXT, collected_at TEXT)""", commit=True)
-        sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS resource_packages_cn (
-            pkg_id TEXT PRIMARY KEY, name TEXT, source TEXT, status TEXT,
-            activated_at TEXT, expires_at TEXT,
-            limit_value REAL, used_value REAL, remaining_value REAL,
-            unit TEXT, collected_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS ai_code_ranking (
             user_id TEXT, email TEXT, display_name TEXT,
             total_lines_added INTEGER, ai_lines_added INTEGER,
@@ -242,27 +232,6 @@ def run(config, modules):
         if not result.get("success"):
             return None
         return result.get("json")
-
-    def list_resource_packages(base_url, key, o_id):
-        """分页获取组织共享资源包。"""
-        url = f"{base_url}/v1/organizations/{o_id}/resource-packages"
-        headers = {"Authorization": f"Bearer {key}"}
-        all_pkgs = []
-        next_token = ""
-        while True:
-            params = {"maxResults": 100}
-            if next_token:
-                params["nextToken"] = next_token
-            result = http_mod.get(url, params=params, headers=headers)
-            if not result.get("success"):
-                _log(f"获取资源包失败: {result.get('error', 'unknown')}", "WARN")
-                break
-            data = result.get("json", {})
-            all_pkgs.extend(data.get("resourcePackages", []))
-            next_token = data.get("nextToken", "")
-            if not next_token:
-                break
-        return all_pkgs
 
     def is_quota_exhausted(quota):
         if quota.get("status") == "restricted":
@@ -365,12 +334,9 @@ def run(config, modules):
 
         # Qoder 国际版
         qoder_quota_data = _check_org_members(api_base_url, api_key, org_id)
-        _collect_resource_packages(api_base_url, api_key, org_id, "resource_packages")
 
         # Qoder CN
         cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
-        if cn_api_key and cn_org_id:
-            _collect_resource_packages(cn_base_url, cn_api_key, cn_org_id, "resource_packages_cn")
 
         # 更新 API 成员映射（用于差异比对）
         api_members = list_all_members(api_base_url, api_key, org_id)
@@ -435,25 +401,6 @@ def run(config, modules):
                 send_alarm(member, quota)
             time.sleep(rate_limit_delay)
         return quota_data
-
-    def _collect_resource_packages(base_url, key, o_id, table_name):
-        """采集共享资源包并写入 SQLite。"""
-        pkgs = list_resource_packages(base_url, key, o_id)
-        if not pkgs:
-            _log(f"组织 {o_id} 无资源包数据")
-            return
-        collected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            sqlite_mod.execute(db_path=_DB_FILE, sql=f"DELETE FROM {table_name}", commit=True)
-            rows = [(p.get("id", ""), p.get("name", ""), p.get("source", ""), p.get("status", ""),
-                     p.get("activatedAt", ""), p.get("expiresAt", ""),
-                     p.get("limitValue", 0), p.get("usedValue", 0), p.get("remainingValue", 0),
-                     p.get("unit", "credits"), collected_at) for p in pkgs]
-            sqlite_mod.batch_insert(db_path=_DB_FILE,
-                sql=f"INSERT OR REPLACE INTO {table_name} VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows=rows)
-            _log(f"资源包写入 {table_name}: {len(rows)} 条")
-        except Exception as e:
-            _log(f"资源包写入失败: {e}", "WARN")
 
     def do_ai_code_check():
         """采集 AI 代码排名和 commit 明细，存入 SQLite。"""
@@ -570,11 +517,11 @@ def run(config, modules):
                 api_members_cn = dict(_shared_data.get("api_members_cn", {}))
             return {"status_code": 200, "content_type": "application/json; charset=utf-8",
                     "body": json.dumps({
-                        "qoder": _build_account_data("qoder_accounts", api_members, "resource_packages"),
-                        "qoder_cn": _build_account_data("qoder_cn_accounts", api_members_cn, "resource_packages_cn"),
+                        "qoder": _build_account_data("qoder_accounts", api_members),
+                        "qoder_cn": _build_account_data("qoder_cn_accounts", api_members_cn),
                     }, ensure_ascii=False)}
 
-        def _build_account_data(table_name, api_map, pkg_table):
+        def _build_account_data(table_name, api_map):
             """构建单个组织的账号数据。"""
             acc_result = sqlite_mod.query(db_path=_DB_FILE,
                 sql=f"SELECT email, name, department FROM {table_name} ORDER BY email")
@@ -590,27 +537,7 @@ def run(config, modules):
                     diff = "API无此账号"
                 members.append({"email": email, "name": name,
                                 "department": r.get("department", ""), "diff": diff})
-            pkg_result = sqlite_mod.query(db_path=_DB_FILE,
-                sql=f"SELECT name, source, status, limit_value, used_value, remaining_value, expires_at FROM {pkg_table}")
-            packages = [_pkg_row_to_dict(r) for r in pkg_result.get("data", {}).get("rows", [])]
-            summary = _calc_pkg_summary(packages)
-            summary["last_updated"] = _shared_data.get("last_updated")
-            return {"members": members, "packages": packages, "summary": summary}
-
-        def _pkg_row_to_dict(r):
-            limit = r.get("limit_value", 0) or 0
-            used = r.get("used_value", 0) or 0
-            return {"name": r.get("name", ""), "source": r.get("source", ""), "status": r.get("status", ""),
-                    "limitValue": limit, "usedValue": used,
-                    "remainingValue": r.get("remaining_value", 0) or 0,
-                    "expiresAt": r.get("expires_at", ""),
-                    "usageRate": round(used / limit * 100, 1) if limit > 0 else 0}
-
-        def _calc_pkg_summary(packages):
-            total_limit = sum(p["limitValue"] for p in packages)
-            total_used = sum(p["usedValue"] for p in packages)
-            return {"packageTotalLimit": total_limit, "packageTotalUsed": total_used,
-                    "packageUsageRate": round(total_used / total_limit * 100, 1) if total_limit > 0 else 0}
+            return {"members": members, "summary": {"last_updated": _shared_data.get("last_updated")}}
 
         web_mod.register_handler("/api/accounts", "POST", _get_accounts_snapshot)
 
@@ -634,21 +561,12 @@ def run(config, modules):
                             "usedValue": total.get("usedValue", 0), "limitValue": total.get("limitValue", 0),
                             "status": q.get("status", "unknown")})
                     time.sleep(rate_limit_delay)
-            q_pkgs = _get_pkgs_from_db("resource_packages")
-            cn_pkgs = _get_pkgs_from_db("resource_packages_cn")
             return {"status_code": 200, "content_type": "application/json; charset=utf-8",
                     "body": json.dumps({
-                        "qoder": {"members": qoder_members, "packages": q_pkgs,
-                                  "summary": _calc_pkg_summary(q_pkgs)},
-                        "qoder_cn": {"members": cn_members, "packages": cn_pkgs,
-                                     "summary": _calc_pkg_summary(cn_pkgs)},
+                        "qoder": {"members": qoder_members},
+                        "qoder_cn": {"members": cn_members},
                         "last_updated": snapshot.get("last_updated"),
                     }, ensure_ascii=False)}
-
-        def _get_pkgs_from_db(table_name):
-            result = sqlite_mod.query(db_path=_DB_FILE,
-                sql=f"SELECT name, source, status, limit_value, used_value, remaining_value, expires_at FROM {table_name}")
-            return [_pkg_row_to_dict(r) for r in result.get("data", {}).get("rows", [])]
 
         web_mod.register_handler("/api/usage", "POST", handle_usage)
 

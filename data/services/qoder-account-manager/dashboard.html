@@ -147,7 +147,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>共享额度</th><th>共享使用量</th><th>使用率</th><th>状态</th>
+          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>使用率</th><th>状态</th>
         </tr></thead>
         <tbody id="usage-tbody"></tbody>
       </table>
@@ -156,7 +156,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>共享额度</th><th>共享使用量</th><th>使用率</th><th>状态</th>
+          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>使用率</th><th>状态</th>
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
       </table>
@@ -269,16 +269,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
 }
 
 function renderPackages(packages, summary) {
-  const totalLimit = summary.packageTotalLimit || 0;
-  const totalUsed = summary.packageTotalUsed || 0;
-  const usageRate = summary.packageUsageRate || 0;
-  const bc = barClass(usageRate);
-  let html = '<div class="stats">' +
-    '<div class="stat-card"><div class="label">总额度</div><div class="value">' + fmt(totalLimit) + '</div></div>' +
-    '<div class="stat-card"><div class="label">已用</div><div class="value">' + fmt(totalUsed) + '</div></div>' +
-    '<div class="stat-card"><div class="label">使用率</div><div class="value ' + (bc==='green'?'green':bc==='red'?'danger':'') + '">' + usageRate.toFixed(1) + '%</div></div>' +
-    '</div>';
-  return html;
+  return '';
 }
 
 // ── 用量监控 ──
@@ -296,12 +287,9 @@ async function fetchUsage() {
 function renderUsageOrg(org, tbodyId) {
   const data = usageData ? (usageData[org] || {}) : {};
   const members = data.members || [];
-  const summary = data.summary || {};
-  const sharedLimit = summary.packageTotalLimit || 0;
-  const sharedUsed = summary.packageTotalUsed || 0;
 
   if (!members.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="8" class="empty-state">暂无数据</td></tr>';
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="6" class="empty-state">暂无数据</td></tr>';
     return;
   }
   const rows = members.map(m => {
@@ -317,8 +305,6 @@ function renderUsageOrg(org, tbodyId) {
       '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
       '<td>' + fmt(used) + '</td>' +
       '<td>' + fmt(limit) + '</td>' +
-      '<td>' + fmt(sharedLimit) + '</td>' +
-      '<td>' + fmt(sharedUsed) + '</td>' +
       '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
       '<td>' + badge + '</td></tr>';
   });
