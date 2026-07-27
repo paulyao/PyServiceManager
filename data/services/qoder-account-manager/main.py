@@ -151,7 +151,6 @@ th.sort-desc::after { content: ' \u25bc'; font-size: 10px; color: var(--blue); }
   <!-- Tab 1: Qoder 账号 -->
   <div id="tab-accounts">
     <div class="updated" id="acc-updated">加载中...</div>
-    <div class="pkg-section" id="acc-packages"></div>
     <div class="search-row">
       <input class="search-box" id="acc-search" type="text" placeholder="搜索邮箱...">
     </div>
@@ -168,7 +167,6 @@ th.sort-desc::after { content: ' \u25bc'; font-size: 10px; color: var(--blue); }
   <!-- Tab 2: Qoder CN 账号 -->
   <div id="tab-accounts-cn" style="display:none">
     <div class="updated" id="cn-updated">加载中...</div>
-    <div class="pkg-section" id="cn-packages"></div>
     <div class="search-row">
       <input class="search-box" id="cn-search" type="text" placeholder="搜索邮箱...">
     </div>
@@ -186,21 +184,19 @@ th.sort-desc::after { content: ' \u25bc'; font-size: 10px; color: var(--blue); }
   <div id="tab-usage" style="display:none">
     <div class="updated" id="usage-updated">加载中...</div>
     <h2>Qoder 国际版</h2>
-    <div class="pkg-section" id="usage-packages"></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>使用率</th><th>状态</th>
+          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>共享额度</th><th>共享使用量</th><th>使用率</th><th>状态</th>
         </tr></thead>
         <tbody id="usage-tbody"></tbody>
       </table>
     </div>
     <h2>Qoder CN</h2>
-    <div class="pkg-section" id="usage-packages-cn"></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>使用率</th><th>状态</th>
+          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>共享额度</th><th>共享使用量</th><th>使用率</th><th>状态</th>
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
       </table>
@@ -281,24 +277,19 @@ async function fetchAccounts() {
     const r = await fetch(base + 'api/accounts', {method: 'POST'});
     const d = await r.json();
     accountData = d;
-    renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search', 'acc-packages');
-    renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search', 'cn-packages');
+    renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search');
+    renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search');
   } catch(e) { console.error('accounts fetch error:', e); }
 }
 
-function renderAccounts(org, tbodyId, updatedId, searchId, pkgId) {
+function renderAccounts(org, tbodyId, updatedId, searchId) {
   const data = accountData[org] || {};
   const members = (data.members || []).filter(m => m.name);
-  const packages = data.packages || [];
   const summary = data.summary || {};
   const q = document.getElementById(searchId) ? document.getElementById(searchId).value.toLowerCase() : '';
   const filtered = members.filter(m => !q || m.email.toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q));
 
   document.getElementById(updatedId).textContent = summary.last_updated ? '上次更新: ' + summary.last_updated : '尚未采集';
-
-  // Render packages
-  const pkgHtml = packages.length ? renderPackages(packages, summary) : '';
-  document.getElementById(pkgId).innerHTML = pkgHtml;
 
   if (!filtered.length) {
     document.getElementById(tbodyId).innerHTML = '<tr><td colspan="4" class="empty-state">无匹配账号</td></tr>';
@@ -327,23 +318,6 @@ function renderPackages(packages, summary) {
     '<div class="stat-card"><div class="label">已用</div><div class="value">' + fmt(totalUsed) + '</div></div>' +
     '<div class="stat-card"><div class="label">使用率</div><div class="value ' + (bc==='green'?'green':bc==='red'?'danger':'') + '">' + usageRate.toFixed(1) + '%</div></div>' +
     '</div>';
-  if (packages.length) {
-    html += '<div class="table-wrap"><table><thead><tr>' +
-      '<th>名称</th><th>来源</th><th>状态</th><th>额度</th><th>已用</th><th>剩余</th><th>到期</th>' +
-      '</tr></thead><tbody>';
-    packages.forEach(p => {
-      const rate = p.limitValue > 0 ? (p.usedValue / p.limitValue * 100) : 0;
-      html += '<tr>' +
-        '<td class="name-cell">' + esc(p.name) + '</td>' +
-        '<td>' + esc(p.source || '-') + '</td>' +
-        '<td><span class="badge ' + (p.status==='active'?'active':'other') + '">' + esc(p.status) + '</span></td>' +
-        '<td>' + fmt(p.limitValue) + '</td>' +
-        '<td>' + fmt(p.usedValue) + '</td>' +
-        '<td>' + fmt(p.remainingValue) + '</td>' +
-        '<td class="email-cell">' + esc((p.expiresAt||'').substring(0,10)) + '</td></tr>';
-    });
-    html += '</tbody></table></div>';
-  }
   return html;
 }
 
@@ -354,21 +328,20 @@ async function fetchUsage() {
     const d = await r.json();
     usageData = d;
     document.getElementById('usage-updated').textContent = d.last_updated ? '上次更新: ' + d.last_updated : '尚未采集';
-    renderUsageOrg('qoder', 'usage-tbody', 'usage-packages');
-    renderUsageOrg('qoder_cn', 'usage-tbody-cn', 'usage-packages-cn');
+    renderUsageOrg('qoder', 'usage-tbody');
+    renderUsageOrg('qoder_cn', 'usage-tbody-cn');
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
-function renderUsageOrg(org, tbodyId, pkgId) {
+function renderUsageOrg(org, tbodyId) {
   const data = usageData ? (usageData[org] || {}) : {};
   const members = data.members || [];
-  const packages = data.packages || [];
   const summary = data.summary || {};
-
-  document.getElementById(pkgId).innerHTML = packages.length ? renderPackages(packages, summary) : '';
+  const sharedLimit = summary.packageTotalLimit || 0;
+  const sharedUsed = summary.packageTotalUsed || 0;
 
   if (!members.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="6" class="empty-state">暂无数据</td></tr>';
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="8" class="empty-state">暂无数据</td></tr>';
     return;
   }
   const rows = members.map(m => {
@@ -384,14 +357,16 @@ function renderUsageOrg(org, tbodyId, pkgId) {
       '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
       '<td>' + fmt(used) + '</td>' +
       '<td>' + fmt(limit) + '</td>' +
+      '<td>' + fmt(sharedLimit) + '</td>' +
+      '<td>' + fmt(sharedUsed) + '</td>' +
       '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
       '<td>' + badge + '</td></tr>';
   });
   document.getElementById(tbodyId).innerHTML = rows.join('');
 }
 
-document.getElementById('acc-search').addEventListener('input', () => renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search', 'acc-packages'));
-document.getElementById('cn-search').addEventListener('input', () => renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search', 'cn-packages'));
+document.getElementById('acc-search').addEventListener('input', () => renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search'));
+document.getElementById('cn-search').addEventListener('input', () => renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search'));
 
 // ── AI 代码统计 ──
 let aiMembers = [];
