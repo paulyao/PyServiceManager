@@ -128,7 +128,11 @@ def run(config, modules):
         """初始化所有 SQLite 表。"""
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS quota_members (
             name TEXT, email TEXT PRIMARY KEY,
-            used_value REAL, limit_value REAL, unit TEXT,
+            plan_used REAL, plan_limit REAL,
+            pkg_used REAL, pkg_limit REAL,
+            total_used REAL, total_limit REAL,
+            shared_used REAL, shared_limit REAL,
+            unit TEXT,
             status TEXT, next_reset_at TEXT, collected_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS qoder_accounts (
             email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '', updated_at TEXT)""", commit=True)
@@ -356,10 +360,12 @@ def run(config, modules):
 
         try:
             sqlite_mod.execute(db_path=_DB_FILE, sql="DELETE FROM quota_members", commit=True)
-            rows = [(m["name"], m["email"], m["usedValue"], m["limitValue"],
-                     m["unit"], m["status"], m["nextResetAt"], collected_at) for m in qoder_quota_data]
+            rows = [(m["name"], m["email"], m["planUsed"], m["planLimit"],
+                     m["pkgUsed"], m["pkgLimit"], m["totalUsed"], m["totalLimit"],
+                     m["sharedUsed"], m["sharedLimit"], m["unit"], m["status"], m["nextResetAt"], collected_at)
+                    for m in qoder_quota_data]
             sqlite_mod.batch_insert(db_path=_DB_FILE,
-                sql="INSERT OR REPLACE INTO quota_members VALUES (?,?,?,?,?,?,?,?)", rows=rows)
+                sql="INSERT OR REPLACE INTO quota_members VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows=rows)
             _log(f"用量数据已写入 SQLite: {len(rows)} 条记录")
         except Exception as e:
             _log(f"写入 SQLite 失败: {e}", "WARN")
@@ -373,7 +379,7 @@ def run(config, modules):
             _log(f"AI 代码统计采集异常: {e}", "ERROR")
 
     def _check_org_members(base_url, key, o_id):
-        """检查单个组织的成员配额。"""
+        """检查单个组织的成员配额，包括 Plan/资源包/总计/共享包配额。"""
         members = list_all_members(base_url, key, o_id)
         if not members:
             _log(f"组织 {o_id} 未获取到任何成员", "WARN")
@@ -387,13 +393,22 @@ def run(config, modules):
             quota = get_member_quota(base_url, key, o_id, member_id)
             if quota is None:
                 continue
-            total = quota.get("totalQuota", {}).get("quotaSummary", {})
+            plan_q = quota.get("planQuota", {}).get("quotaSummary", {})
+            pkg_q = quota.get("resourcePackageQuota", {}).get("quotaSummary", {})
+            total_q = quota.get("totalQuota", {}).get("quotaSummary", {})
+            shared_q = quota.get("sharedQuota", {}).get("quotaSummary", {})
             quota_data.append({
                 "name": member.get("name", ""),
                 "email": member.get("email", ""),
-                "usedValue": total.get("usedValue", 0),
-                "limitValue": total.get("limitValue", 0),
-                "unit": total.get("unit", "credits"),
+                "planUsed": plan_q.get("usedValue", 0),
+                "planLimit": plan_q.get("limitValue", 0),
+                "pkgUsed": pkg_q.get("usedValue", 0),
+                "pkgLimit": pkg_q.get("limitValue", 0),
+                "totalUsed": total_q.get("usedValue", 0),
+                "totalLimit": total_q.get("limitValue", 0),
+                "sharedUsed": shared_q.get("usedValue", 0),
+                "sharedLimit": shared_q.get("limitValue", 0),
+                "unit": total_q.get("unit", "credits"),
                 "status": quota.get("status", "unknown"),
                 "nextResetAt": quota.get("nextResetAt", ""),
             })
@@ -476,11 +491,14 @@ def run(config, modules):
 
     try:
         result = sqlite_mod.query(db_path=_DB_FILE,
-            sql="SELECT name, email, used_value, limit_value, unit, status, next_reset_at, collected_at FROM quota_members")
+            sql="SELECT name, email, plan_used, plan_limit, pkg_used, pkg_limit, total_used, total_limit, shared_used, shared_limit, unit, status, next_reset_at, collected_at FROM quota_members")
         cached_members = []
         for r in result.get("data", {}).get("rows", []):
             cached_members.append({"name": r.get("name", ""), "email": r.get("email", ""),
-                "usedValue": r.get("used_value", 0), "limitValue": r.get("limit_value", 0),
+                "planUsed": r.get("plan_used", 0), "planLimit": r.get("plan_limit", 0),
+                "pkgUsed": r.get("pkg_used", 0), "pkgLimit": r.get("pkg_limit", 0),
+                "totalUsed": r.get("total_used", 0), "totalLimit": r.get("total_limit", 0),
+                "sharedUsed": r.get("shared_used", 0), "sharedLimit": r.get("shared_limit", 0),
                 "unit": r.get("unit", "credits"), "status": r.get("status", "unknown"),
                 "nextResetAt": r.get("next_reset_at", "")})
         if cached_members:
@@ -556,10 +574,16 @@ def run(config, modules):
                         continue
                     q = get_member_quota(cn_base_url, cn_api_key, cn_org_id, mid)
                     if q:
-                        total = q.get("totalQuota", {}).get("quotaSummary", {})
+                        plan_q = q.get("planQuota", {}).get("quotaSummary", {})
+                        pkg_q = q.get("resourcePackageQuota", {}).get("quotaSummary", {})
+                        total_q = q.get("totalQuota", {}).get("quotaSummary", {})
+                        shared_q = q.get("sharedQuota", {}).get("quotaSummary", {})
                         cn_members.append({"email": m.get("email", ""), "name": m.get("name", ""),
-                            "usedValue": total.get("usedValue", 0), "limitValue": total.get("limitValue", 0),
-                            "status": q.get("status", "unknown")})
+                            "planUsed": plan_q.get("usedValue", 0), "planLimit": plan_q.get("limitValue", 0),
+                            "pkgUsed": pkg_q.get("usedValue", 0), "pkgLimit": pkg_q.get("limitValue", 0),
+                            "totalUsed": total_q.get("usedValue", 0), "totalLimit": total_q.get("limitValue", 0),
+                            "sharedUsed": shared_q.get("usedValue", 0), "sharedLimit": shared_q.get("limitValue", 0),
+                            "unit": total_q.get("unit", "credits"), "status": q.get("status", "unknown")})
                     time.sleep(rate_limit_delay)
             return {"status_code": 200, "content_type": "application/json; charset=utf-8",
                     "body": json.dumps({

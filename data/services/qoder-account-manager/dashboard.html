@@ -147,7 +147,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>使用率</th><th>状态</th>
+          <th>邮箱</th><th>姓名</th><th>Plan已用</th><th>Plan额度</th><th>资源包已用</th><th>资源包额度</th><th>总计已用</th><th>总计额度</th><th>共享已用</th><th>共享额度</th><th>使用率</th><th>状态</th>
         </tr></thead>
         <tbody id="usage-tbody"></tbody>
       </table>
@@ -156,7 +156,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>已用</th><th>总量</th><th>使用率</th><th>状态</th>
+          <th>邮箱</th><th>姓名</th><th>Plan已用</th><th>Plan额度</th><th>资源包已用</th><th>资源包额度</th><th>总计已用</th><th>总计额度</th><th>共享已用</th><th>共享额度</th><th>使用率</th><th>状态</th>
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
       </table>
@@ -289,13 +289,13 @@ function renderUsageOrg(org, tbodyId) {
   const members = data.members || [];
 
   if (!members.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="6" class="empty-state">暂无数据</td></tr>';
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="12" class="empty-state">暂无数据</td></tr>';
     return;
   }
   const rows = members.map(m => {
-    const limit = m.limitValue || 0;
-    const used = m.usedValue || 0;
-    const pct = limit > 0 ? (used / limit * 100) : 0;
+    const totalLimit = m.totalLimit || 0;
+    const totalUsed = m.totalUsed || 0;
+    const pct = totalLimit > 0 ? (totalUsed / totalLimit * 100) : 0;
     const bc = barClass(pct);
     const badge = m.status === 'restricted' ? '<span class="badge restricted">restricted</span>'
       : m.status === 'active' ? '<span class="badge active">active</span>'
@@ -303,8 +303,14 @@ function renderUsageOrg(org, tbodyId) {
     return '<tr>' +
       '<td class="email-cell">' + esc(m.email) + '</td>' +
       '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
-      '<td>' + fmt(used) + '</td>' +
-      '<td>' + fmt(limit) + '</td>' +
+      '<td>' + fmt(m.planUsed||0) + '</td>' +
+      '<td>' + fmt(m.planLimit||0) + '</td>' +
+      '<td>' + fmt(m.pkgUsed||0) + '</td>' +
+      '<td>' + fmt(m.pkgLimit||0) + '</td>' +
+      '<td>' + fmt(m.totalUsed||0) + '</td>' +
+      '<td>' + fmt(m.totalLimit||0) + '</td>' +
+      '<td>' + fmt(m.sharedUsed||0) + '</td>' +
+      '<td>' + fmt(m.sharedLimit||0) + '</td>' +
       '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
       '<td>' + badge + '</td></tr>';
   });
