@@ -152,12 +152,10 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
           <th class="sortable" onclick="sortUsage('name')">姓名</th>
           <th class="sortable" onclick="sortUsage('planUsed')">Plan已用</th>
           <th class="sortable" onclick="sortUsage('planLimit')">Plan额度</th>
-          <th class="sortable" onclick="sortUsage('pkgUsed')">资源包已用</th>
-          <th class="sortable" onclick="sortUsage('pkgLimit')">资源包额度</th>
-          <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
-          <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('sharedUsed')">共享已用</th>
           <th class="sortable" onclick="sortUsage('sharedLimit')">共享额度</th>
+          <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
+          <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
           <th class="sortable" onclick="sortUsage('status')">状态</th>
         </tr></thead>
@@ -173,12 +171,10 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
           <th class="sortable" onclick="sortUsage('name')">姓名</th>
           <th class="sortable" onclick="sortUsage('planUsed')">Plan已用</th>
           <th class="sortable" onclick="sortUsage('planLimit')">Plan额度</th>
-          <th class="sortable" onclick="sortUsage('pkgUsed')">资源包已用</th>
-          <th class="sortable" onclick="sortUsage('pkgLimit')">资源包额度</th>
-          <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
-          <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('sharedUsed')">共享已用</th>
           <th class="sortable" onclick="sortUsage('sharedLimit')">共享额度</th>
+          <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
+          <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
           <th class="sortable" onclick="sortUsage('status')">状态</th>
         </tr></thead>
@@ -325,8 +321,12 @@ function renderUsageStats(org, statsId) {
   const members = data.members || [];
   const totalMembers = members.length;
   const exhausted = members.filter(m => m.status === 'restricted').length;
-  const lowUsage = members.filter(m => { const l = m.totalLimit||0, u = m.totalUsed||0; return l > 0 && (u/l*100) < 50; }).length;
-  const unused = members.filter(m => (m.totalUsed||0) === 0).length;
+  const lowUsage = members.filter(m => {
+    const u = (m.planUsed||0) + (m.sharedUsed||0);
+    const l = (m.planLimit||0) + (m.sharedLimit||0);
+    return l > 0 && (u/l*100) < 50;
+  }).length;
+  const unused = members.filter(m => ((m.planUsed||0) + (m.sharedUsed||0)) === 0).length;
   document.getElementById(statsId).innerHTML =
     '<div class="stat-card"><div class="label">总成员</div><div class="value">' + totalMembers + ' 人</div></div>' +
     '<div class="stat-card"><div class="label">配额耗尽</div><div class="value danger">' + exhausted + ' 人</div></div>' +
@@ -339,9 +339,20 @@ function renderUsageOrg(org, tbodyId) {
   let members = data.members || [];
 
   if (!members.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="12" class="empty-state">暂无数据</td></tr>';
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="10" class="empty-state">暂无数据</td></tr>';
     return;
   }
+  // 计算总计（Plan + 共享）和使用率
+  members = members.map(m => {
+    const planUsed = m.planUsed || 0;
+    const planLimit = m.planLimit || 0;
+    const sharedUsed = m.sharedUsed || 0;
+    const sharedLimit = m.sharedLimit || 0;
+    const totalUsed = planUsed + sharedUsed;
+    const totalLimit = planLimit + sharedLimit;
+    const usageRate = totalLimit > 0 ? (totalUsed / totalLimit * 100) : 0;
+    return { ...m, totalUsed, totalLimit, usageRate };
+  });
   // 排序
   members = [...members].sort((a, b) => {
     const av = a[usageSortField]; const bv = b[usageSortField];
@@ -361,12 +372,10 @@ function renderUsageOrg(org, tbodyId) {
       '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
       '<td>' + fmt(m.planUsed||0) + '</td>' +
       '<td>' + fmt(m.planLimit||0) + '</td>' +
-      '<td>' + fmt(m.pkgUsed||0) + '</td>' +
-      '<td>' + fmt(m.pkgLimit||0) + '</td>' +
-      '<td>' + fmt(m.totalUsed||0) + '</td>' +
-      '<td>' + fmt(m.totalLimit||0) + '</td>' +
       '<td>' + fmt(m.sharedUsed||0) + '</td>' +
       '<td>' + fmt(m.sharedLimit||0) + '</td>' +
+      '<td>' + fmt(m.totalUsed||0) + '</td>' +
+      '<td>' + fmt(m.totalLimit||0) + '</td>' +
       '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
       '<td>' + badge + '</td></tr>';
   });
