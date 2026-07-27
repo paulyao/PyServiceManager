@@ -126,6 +126,15 @@ def run(config, modules):
 
     def _init_db():
         """初始化所有 SQLite 表。"""
+        # 迁移：检测旧表结构，若有 used_value 列则删除重建
+        try:
+            cols = sqlite_mod.query(db_path=_DB_FILE, sql="PRAGMA table_info(quota_members)")
+            col_names = [c.get("name", "") for c in cols.get("data", {}).get("rows", [])]
+            if col_names and "plan_used" not in col_names:
+                sqlite_mod.execute(db_path=_DB_FILE, sql="DROP TABLE IF EXISTS quota_members", commit=True)
+                _log("检测到旧 quota_members 表结构，已删除重建")
+        except Exception:
+            pass  # 表不存在或查询失败，忽略
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS quota_members (
             name TEXT, email TEXT PRIMARY KEY,
             plan_used REAL, plan_limit REAL,
