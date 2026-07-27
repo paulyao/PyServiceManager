@@ -147,7 +147,18 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>Plan已用</th><th>Plan额度</th><th>资源包已用</th><th>资源包额度</th><th>总计已用</th><th>总计额度</th><th>共享已用</th><th>共享额度</th><th>使用率</th><th>状态</th>
+          <th class="sortable" onclick="sortUsage('email')">邮箱</th>
+          <th class="sortable" onclick="sortUsage('name')">姓名</th>
+          <th class="sortable" onclick="sortUsage('planUsed')">Plan已用</th>
+          <th class="sortable" onclick="sortUsage('planLimit')">Plan额度</th>
+          <th class="sortable" onclick="sortUsage('pkgUsed')">资源包已用</th>
+          <th class="sortable" onclick="sortUsage('pkgLimit')">资源包额度</th>
+          <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
+          <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
+          <th class="sortable" onclick="sortUsage('sharedUsed')">共享已用</th>
+          <th class="sortable" onclick="sortUsage('sharedLimit')">共享额度</th>
+          <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
+          <th class="sortable" onclick="sortUsage('status')">状态</th>
         </tr></thead>
         <tbody id="usage-tbody"></tbody>
       </table>
@@ -156,7 +167,18 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>Plan已用</th><th>Plan额度</th><th>资源包已用</th><th>资源包额度</th><th>总计已用</th><th>总计额度</th><th>共享已用</th><th>共享额度</th><th>使用率</th><th>状态</th>
+          <th class="sortable" onclick="sortUsage('email')">邮箱</th>
+          <th class="sortable" onclick="sortUsage('name')">姓名</th>
+          <th class="sortable" onclick="sortUsage('planUsed')">Plan已用</th>
+          <th class="sortable" onclick="sortUsage('planLimit')">Plan额度</th>
+          <th class="sortable" onclick="sortUsage('pkgUsed')">资源包已用</th>
+          <th class="sortable" onclick="sortUsage('pkgLimit')">资源包额度</th>
+          <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
+          <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
+          <th class="sortable" onclick="sortUsage('sharedUsed')">共享已用</th>
+          <th class="sortable" onclick="sortUsage('sharedLimit')">共享额度</th>
+          <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
+          <th class="sortable" onclick="sortUsage('status')">状态</th>
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
       </table>
@@ -284,14 +306,30 @@ async function fetchUsage() {
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
+// ── 用量监控排序 ──
+let usageSortField = 'totalUsed';
+let usageSortAsc = false;
+
+function sortUsage(field) {
+  if (field === usageSortField) { usageSortAsc = !usageSortAsc; } else { usageSortField = field; usageSortAsc = false; }
+  renderUsageOrg('qoder', 'usage-tbody');
+  renderUsageOrg('qoder_cn', 'usage-tbody-cn');
+}
+
 function renderUsageOrg(org, tbodyId) {
   const data = usageData ? (usageData[org] || {}) : {};
-  const members = data.members || [];
+  let members = data.members || [];
 
   if (!members.length) {
     document.getElementById(tbodyId).innerHTML = '<tr><td colspan="12" class="empty-state">暂无数据</td></tr>';
     return;
   }
+  // 排序
+  members = [...members].sort((a, b) => {
+    const av = a[usageSortField]; const bv = b[usageSortField];
+    if (typeof av === 'string') return usageSortAsc ? (av||'').localeCompare(bv||'') : (bv||'').localeCompare(av||'');
+    return usageSortAsc ? (av || 0) - (bv || 0) : (bv || 0) - (av || 0);
+  });
   const rows = members.map(m => {
     const totalLimit = m.totalLimit || 0;
     const totalUsed = m.totalUsed || 0;
@@ -315,6 +353,15 @@ function renderUsageOrg(org, tbodyId) {
       '<td>' + badge + '</td></tr>';
   });
   document.getElementById(tbodyId).innerHTML = rows.join('');
+  // 高亮当前排序列
+  const tableWrap = document.getElementById(tbodyId).closest('.table-wrap');
+  if (tableWrap) {
+    tableWrap.querySelectorAll('th.sortable').forEach(th => {
+      th.classList.remove('sort-asc', 'sort-desc');
+      const field = th.getAttribute('onclick').match(/'([^']+)'/)[1];
+      if (field === usageSortField) th.classList.add(usageSortAsc ? 'sort-asc' : 'sort-desc');
+    });
+  }
 }
 
 document.getElementById('acc-search').addEventListener('input', () => renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search'));
