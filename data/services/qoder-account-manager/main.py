@@ -28,6 +28,7 @@ POLL_INTERVAL = 10
 _data_lock = threading.Lock()
 _shared_data = {
     "members": [],
+    "members_cn": [],
     "last_updated": None,
     "total_members": 0,
     "exhausted_count": 0,
@@ -136,6 +137,14 @@ def run(config, modules):
         except Exception:
             pass  # 表不存在或查询失败，忽略
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS quota_members (
+            name TEXT, email TEXT PRIMARY KEY,
+            plan_used REAL, plan_limit REAL,
+            pkg_used REAL, pkg_limit REAL,
+            total_used REAL, total_limit REAL,
+            shared_used REAL, shared_limit REAL,
+            unit TEXT,
+            status TEXT, next_reset_at TEXT, collected_at TEXT)""", commit=True)
+        sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS quota_members_cn (
             name TEXT, email TEXT PRIMARY KEY,
             plan_used REAL, plan_limit REAL,
             pkg_used REAL, pkg_limit REAL,
@@ -341,43 +350,28 @@ def run(config, modules):
     # ── 采集任务 ──
 
     def do_check():
-        """执行一轮完整的用量检查（两套配置）。"""
+        """执行一轮完整的用量检查（两套配置），结果写入 SQLite。"""
         _log("开始检查成员用量")
         collected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Qoder 国际版
         qoder_quota_data = _check_org_members(api_base_url, api_key, org_id)
-
-        # Qoder CN
-        cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
-
-        # 更新 API 成员映射（用于差异比对）
-        api_members = list_all_members(api_base_url, api_key, org_id)
-        with _data_lock:
-            _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in api_members}
-        if cn_api_key and cn_org_id:
-            api_members_cn = list_all_members(cn_base_url, cn_api_key, cn_org_id)
-            with _data_lock:
-                _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in api_members_cn}
-
-        # 持久化 Qoder 用量到 SQLite
+        _save_quota_to_sqlite("quota_members", qoder_quota_data, collected_at)
         with _data_lock:
             _shared_data["members"] = qoder_quota_data
             _shared_data["last_updated"] = collected_at
             _shared_data["total_members"] = len(qoder_quota_data)
             _shared_data["exhausted_count"] = sum(1 for m in qoder_quota_data if m["status"] == "restricted")
+            # 从用量表构建差异比对映射
+            _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in qoder_quota_data}
 
-        try:
-            sqlite_mod.execute(db_path=_DB_FILE, sql="DELETE FROM quota_members", commit=True)
-            rows = [(m["name"], m["email"], m["planUsed"], m["planLimit"],
-                     m["pkgUsed"], m["pkgLimit"], m["totalUsed"], m["totalLimit"],
-                     m["sharedUsed"], m["sharedLimit"], m["unit"], m["status"], m["nextResetAt"], collected_at)
-                    for m in qoder_quota_data]
-            sqlite_mod.batch_insert(db_path=_DB_FILE,
-                sql="INSERT OR REPLACE INTO quota_members VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows=rows)
-            _log(f"用量数据已写入 SQLite: {len(rows)} 条记录")
-        except Exception as e:
-            _log(f"写入 SQLite 失败: {e}", "WARN")
+        # Qoder CN
+        cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
+        if cn_quota_data:
+            _save_quota_to_sqlite("quota_members_cn", cn_quota_data, collected_at)
+            with _data_lock:
+                _shared_data["members_cn"] = cn_quota_data
+                _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in cn_quota_data}
 
         _log(f"本轮检查完成: Qoder {len(qoder_quota_data)} 个成员, Qoder CN {len(cn_quota_data)} 个成员")
 
@@ -386,6 +380,20 @@ def run(config, modules):
             do_ai_code_check()
         except Exception as e:
             _log(f"AI 代码统计采集异常: {e}", "ERROR")
+
+    def _save_quota_to_sqlite(table_name, quota_data, collected_at):
+        """将用量数据批量写入 SQLite。"""
+        try:
+            sqlite_mod.execute(db_path=_DB_FILE, sql=f"DELETE FROM {table_name}", commit=True)
+            rows = [(m["name"], m["email"], m["planUsed"], m["planLimit"],
+                     m["pkgUsed"], m["pkgLimit"], m["totalUsed"], m["totalLimit"],
+                     m["sharedUsed"], m["sharedLimit"], m["unit"], m["status"], m["nextResetAt"], collected_at)
+                    for m in quota_data]
+            sqlite_mod.batch_insert(db_path=_DB_FILE,
+                sql=f"INSERT OR REPLACE INTO {table_name} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows=rows)
+            _log(f"用量数据已写入 {table_name}: {len(rows)} 条记录")
+        except Exception as e:
+            _log(f"写入 {table_name} 失败: {e}", "WARN")
 
     def _check_org_members(base_url, key, o_id):
         """检查单个组织的成员配额，包括 Plan/资源包/总计/共享包配额。"""
@@ -516,9 +524,31 @@ def run(config, modules):
                 _shared_data["total_members"] = len(cached_members)
                 _shared_data["exhausted_count"] = sum(1 for m in cached_members if m["status"] == "restricted")
                 _shared_data["last_updated"] = cached_members[0].get("collected_at")
-            _log(f"已从 SQLite 加载缓存: {len(cached_members)} 个成员")
+                _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in cached_members}
+            _log(f"已从 SQLite 加载 Qoder 缓存: {len(cached_members)} 个成员")
     except Exception as e:
-        _log(f"加载 SQLite 缓存失败: {e}", "WARN")
+        _log(f"加载 Qoder SQLite 缓存失败: {e}", "WARN")
+
+    # 恢复 Qoder CN 用量缓存
+    try:
+        cn_result = sqlite_mod.query(db_path=_DB_FILE,
+            sql="SELECT name, email, plan_used, plan_limit, pkg_used, pkg_limit, total_used, total_limit, shared_used, shared_limit, unit, status, next_reset_at, collected_at FROM quota_members_cn")
+        cn_cached = []
+        for r in cn_result.get("data", {}).get("rows", []):
+            cn_cached.append({"name": r.get("name", ""), "email": r.get("email", ""),
+                "planUsed": r.get("plan_used", 0), "planLimit": r.get("plan_limit", 0),
+                "pkgUsed": r.get("pkg_used", 0), "pkgLimit": r.get("pkg_limit", 0),
+                "totalUsed": r.get("total_used", 0), "totalLimit": r.get("total_limit", 0),
+                "sharedUsed": r.get("shared_used", 0), "sharedLimit": r.get("shared_limit", 0),
+                "unit": r.get("unit", "credits"), "status": r.get("status", "unknown"),
+                "nextResetAt": r.get("next_reset_at", "")})
+        if cn_cached:
+            with _data_lock:
+                _shared_data["members_cn"] = cn_cached
+                _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in cn_cached}
+            _log(f"已从 SQLite 加载 Qoder CN 缓存: {len(cn_cached)} 个成员")
+    except Exception as e:
+        _log(f"加载 Qoder CN SQLite 缓存失败: {e}", "WARN")
 
     try:
         ai_result = sqlite_mod.query_one(db_path=_DB_FILE,
@@ -569,31 +599,11 @@ def run(config, modules):
         web_mod.register_handler("/api/accounts", "POST", _get_accounts_snapshot)
 
         def handle_usage(request_info):
-            """返回两个组织的完整用量数据。"""
+            """返回两个组织的完整用量数据（从 SQLite 读取）。"""
             with _data_lock:
                 snapshot = dict(_shared_data)
             qoder_members = snapshot.get("members", [])
-            # Qoder CN 用量（从 API 获取，不在 SQLite 持久化）
-            cn_members = []
-            if cn_api_key and cn_org_id:
-                cn_api_members = list_all_members(cn_base_url, cn_api_key, cn_org_id)
-                for m in cn_api_members:
-                    mid = m.get("id")
-                    if not mid:
-                        continue
-                    q = get_member_quota(cn_base_url, cn_api_key, cn_org_id, mid)
-                    if q:
-                        plan_q = q.get("planQuota", {}).get("quotaSummary", {})
-                        pkg_q = q.get("resourcePackageQuota", {}).get("quotaSummary", {})
-                        total_q = q.get("totalQuota", {}).get("quotaSummary", {})
-                        shared_q = q.get("sharedQuota", {}).get("quotaSummary", {})
-                        cn_members.append({"email": m.get("email", ""), "name": m.get("name", ""),
-                            "planUsed": plan_q.get("usedValue", 0), "planLimit": plan_q.get("limitValue", 0),
-                            "pkgUsed": pkg_q.get("usedValue", 0), "pkgLimit": pkg_q.get("limitValue", 0),
-                            "totalUsed": total_q.get("usedValue", 0), "totalLimit": total_q.get("limitValue", 0),
-                            "sharedUsed": shared_q.get("usedValue", 0), "sharedLimit": shared_q.get("limitValue", 0),
-                            "unit": total_q.get("unit", "credits"), "status": q.get("status", "unknown")})
-                    time.sleep(rate_limit_delay)
+            cn_members = snapshot.get("members_cn", [])
             return {"status_code": 200, "content_type": "application/json; charset=utf-8",
                     "body": json.dumps({
                         "qoder": {"members": qoder_members},
