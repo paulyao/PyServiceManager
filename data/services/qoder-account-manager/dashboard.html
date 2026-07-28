@@ -422,6 +422,9 @@ function renderUsageOrg(org, tbodyId) {
   const q = searchEl ? searchEl.value.toLowerCase() : '';
   if (q) members = members.filter(m => (m.email||'').toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q));
 
+  // Qoder CN：屏蔽总计额度小于 0 的行
+  if (org === 'qoder_cn') members = members.filter(m => ((m.planLimit||0) + (m.sharedLimit||0)) >= 0);
+
   if (!members.length) {
     document.getElementById(tbodyId).innerHTML = '<tr><td colspan="10" class="empty-state">暂无数据</td></tr>';
     return;
