@@ -334,7 +334,6 @@ async function saveAccount() {
   if (!editingAccount) return;
   const name = document.getElementById('edit-name').value.trim();
   const dept = document.getElementById('edit-dept').value.trim();
-  if (!name) { alert('姓名不能为空'); return; }
   try {
     const r = await fetch(base + 'api/account-update', {
       method: 'POST',
