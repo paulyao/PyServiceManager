@@ -53,6 +53,7 @@ tr:hover { background: #f8fafc; }
 .badge.other { background: #f1f5f9; color: #475569; }
 .badge.diff { background: #fef3c7; color: #92400e; }
 .badge.missing { background: #fee2e2; color: #991b1b; }
+.badge.local-missing { background: #dbeafe; color: #1e40af; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text3); }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
 .updated { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
@@ -105,6 +106,9 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
 .btn-cancel { padding: 4px 12px; border: 1px solid var(--border); background: var(--card); border-radius: 6px;
   cursor: pointer; font-size: 12px; font-weight: 500; color: var(--text2); transition: all 0.2s; }
 .btn-cancel:hover { color: var(--text); }
+.btn-delete { padding: 4px 12px; border: 1px solid #fca5a5; background: var(--card); border-radius: 6px;
+  cursor: pointer; font-size: 12px; font-weight: 500; color: #dc2626; margin-left: 6px; transition: all 0.2s; }
+.btn-delete:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
 .edit-input { width: 110px; padding: 5px 8px; border: 1px solid var(--blue-light); border-radius: 6px;
   font-size: 13px; outline: none; }
 .edit-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
@@ -302,6 +306,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
     let diffBadge = '';
     if (m.diff === '名称不一致') diffBadge = '<span class="badge diff">名称不一致</span>';
     else if (m.diff === 'API无此账号') diffBadge = '<span class="badge missing">API无此账号</span>';
+    else if (m.diff === '本地无此账号') diffBadge = '<span class="badge local-missing">本地无此账号</span>';
     const role = m.role || '开发';
     const isEditing = editingAccount && editingAccount.org === org && editingAccount.email === m.email;
     if (isEditing) {
@@ -317,6 +322,15 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
         '<td><button class="btn-save" onclick="saveAccount()">保存</button>' +
         '<button class="btn-cancel" onclick="cancelEditAccount()">取消</button></td></tr>';
     }
+    const delBtn = '<button class="btn-delete" onclick="deleteAccount(\'' + org + '\',\'' + esc(m.email) + '\')">删除</button>';
+    if (m.diff === '本地无此账号') {
+      return '<tr>' +
+        '<td class="email-cell">' + esc(m.email) + '</td>' +
+        '<td class="name-cell">' + esc(m.name) + '</td>' +
+        '<td class="dept-cell">-</td><td>-</td><td>-</td>' +
+        '<td>' + diffBadge + '</td>' +
+        '<td>' + delBtn + '</td></tr>';
+    }
     return '<tr>' +
       '<td class="email-cell">' + esc(m.email) + '</td>' +
       '<td class="name-cell">' + esc(m.name) + '</td>' +
@@ -324,7 +338,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
       '<td>' + esc(role) + '</td>' +
       '<td>' + esc(m.updated_at || '-') + '</td>' +
       '<td>' + diffBadge + '</td>' +
-      '<td><button class="btn-edit" onclick="startEditAccount(\'' + org + '\',\'' + esc(m.email) + '\')">编辑</button></td></tr>';
+      '<td><button class="btn-edit" onclick="startEditAccount(\'' + org + '\',\'' + esc(m.email) + '\')">编辑</button>' + delBtn + '</td></tr>';
   });
   document.getElementById(tbodyId).innerHTML = rows.join('');
 }
@@ -362,6 +376,21 @@ async function saveAccount() {
     editingAccount = null;
     fetchAccounts();
   } catch(e) { alert('保存失败: ' + e); }
+}
+
+async function deleteAccount(org, email) {
+  if (!confirm('确认删除账号 ' + email + ' ？\n将清空本地姓名/部门数据，并从 Qoder 组织中移除该成员！')) return;
+  try {
+    const r = await fetch(base + 'api/account-delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({org: org, email: email})
+    });
+    const d = await r.json();
+    if (!d.success) { alert('删除失败: ' + (d.error || '未知错误')); return; }
+    alert(d.message || '删除成功');
+    fetchAccounts();
+  } catch(e) { alert('删除失败: ' + e); }
 }
 
 function renderPackages(packages, summary) {
