@@ -170,6 +170,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
           <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
           <th class="sortable" onclick="sortUsage('status')">状态</th>
+          <th>修改配额</th>
         </tr></thead>
         <tbody id="usage-tbody"></tbody>
       </table>
@@ -189,6 +190,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
           <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
           <th class="sortable" onclick="sortUsage('status')">状态</th>
+          <th>修改配额</th>
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
       </table>
@@ -400,7 +402,7 @@ function renderUsageOrg(org, tbodyId) {
   let members = data.members || [];
 
   if (!members.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="10" class="empty-state">暂无数据</td></tr>';
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="11" class="empty-state">暂无数据</td></tr>';
     return;
   }
   // 计算总计（Plan + 共享）和使用率
@@ -438,7 +440,8 @@ function renderUsageOrg(org, tbodyId) {
       '<td>' + fmt(m.totalUsed||0) + '</td>' +
       '<td>' + fmt(m.totalLimit||0) + '</td>' +
       '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
-      '<td>' + badge + '</td></tr>';
+      '<td>' + badge + '</td>' +
+      '<td><button class="btn-edit" onclick="updateAddonCap(\'' + org + '\',\'' + esc(m.email) + '\',' + (m.sharedLimit||0) + ')">修改配额</button></td></tr>';
   });
   document.getElementById(tbodyId).innerHTML = rows.join('');
   // 高亮当前排序列
@@ -450,6 +453,34 @@ function renderUsageOrg(org, tbodyId) {
       if (field === usageSortField) th.classList.add(usageSortAsc ? 'sort-asc' : 'sort-desc');
     });
   }
+}
+
+// ── 修改共享额度（Add-On Cap）──
+async function updateAddonCap(org, email, currentLimit) {
+  const input = prompt('设置 ' + email + ' 的共享额度上限（credits，按百位取整）：', currentLimit || 0);
+  if (input === null) return;
+  const v = parseFloat(input);
+  if (isNaN(v) || v < 0) { alert('请输入非负数字'); return; }
+  const cap = Math.round(v / 100) * 100;
+  if (!confirm('将 ' + email + ' 的共享额度上限设置为 ' + cap + ' credits，确认？')) return;
+  try {
+    const r = await fetch(base + 'api/update-addon-cap', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({org: org, email: email, addOnCap: cap})
+    });
+    const d = await r.json();
+    if (!d.success) { alert('修改失败: ' + (d.error || '未知错误')); return; }
+    // 本地同步新额度并重新渲染
+    if (usageData && usageData[org] && usageData[org].members) {
+      usageData[org].members.forEach(m => { if (m.email === email) m.sharedLimit = d.addOnCap; });
+    }
+    renderUsageOrg('qoder', 'usage-tbody');
+    renderUsageOrg('qoder_cn', 'usage-tbody-cn');
+    renderUsageStats('qoder', 'usage-stats-qoder');
+    renderUsageStats('qoder_cn', 'usage-stats-cn');
+    alert('修改成功：' + email + ' 共享额度上限 = ' + d.addOnCap + ' credits');
+  } catch(e) { alert('修改失败: ' + e); }
 }
 
 document.getElementById('acc-search').addEventListener('input', () => renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search'));

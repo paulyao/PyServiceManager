@@ -640,6 +640,54 @@ def run(config, modules):
 
         web_mod.register_handler("/api/usage", "POST", handle_usage)
 
+        def handle_update_addon_cap(request_info):
+            """修改成员共享额度上限（Add-On Cap），数值按百位取整。"""
+            def _resp(status_code, payload):
+                return {"status_code": status_code, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps(payload, ensure_ascii=False)}
+            body = request_info.get("body", "{}")
+            try:
+                data = json.loads(body) if isinstance(body, str) else body
+            except json.JSONDecodeError:
+                return _resp(400, {"success": False, "error": "Invalid JSON"})
+            org = data.get("org", "")
+            email = (data.get("email") or "").strip()
+            if org == "qoder":
+                base_url, key, o_id = api_base_url, api_key, org_id
+            elif org == "qoder_cn":
+                base_url, key, o_id = cn_base_url, cn_api_key, cn_org_id
+            else:
+                return _resp(400, {"success": False, "error": f"不支持的 org: {org}"})
+            if not email:
+                return _resp(400, {"success": False, "error": "email 不能为空"})
+            try:
+                cap = int(round(float(data.get("addOnCap")) / 100.0)) * 100
+            except (TypeError, ValueError):
+                return _resp(400, {"success": False, "error": "addOnCap 无效"})
+            if cap < 0:
+                return _resp(400, {"success": False, "error": "addOnCap 不能为负数"})
+            headers = {"Authorization": f"Bearer {key}"}
+            # 按邮箱精准查询成员 ID
+            result = http_mod.get(f"{base_url}/v1/organizations/{o_id}/members",
+                params={"email": email}, headers=headers)
+            if not result.get("success"):
+                return _resp(502, {"success": False, "error": f"查询成员失败: {result.get('error', 'unknown')}"})
+            api_members_list = result.get("json", {}).get("members", [])
+            if not api_members_list:
+                return _resp(404, {"success": False, "error": f"未找到成员: {email}"})
+            member_id = api_members_list[0].get("id", "")
+            put_result = http_mod.put(
+                f"{base_url}/v1/organizations/{o_id}/members/{member_id}/addon-cap",
+                json={"addOnCap": cap}, headers=headers)
+            if not put_result.get("success"):
+                err = put_result.get("json", {}).get("message") or put_result.get("error", "unknown")
+                return _resp(502, {"success": False, "error": f"更新 Add-On Cap 失败: {err}"})
+            new_cap = put_result.get("json", {}).get("addOnCap", cap)
+            _log(f"共享额度更新: {org} {email} addOnCap={new_cap}")
+            return _resp(200, {"success": True, "addOnCap": new_cap})
+
+        web_mod.register_handler("/api/update-addon-cap", "POST", handle_update_addon_cap)
+
         def handle_allocate(request_info):
             """对外账号分配 API。"""
             body = request_info.get("body", "{}")
