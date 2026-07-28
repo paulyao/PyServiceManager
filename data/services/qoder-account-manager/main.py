@@ -581,7 +581,7 @@ def run(config, modules):
         def _build_account_data(table_name, api_map):
             """构建单个组织的账号数据。"""
             acc_result = sqlite_mod.query(db_path=_DB_FILE,
-                sql=f"SELECT email, name, department FROM {table_name} ORDER BY email")
+                sql=f"SELECT email, name, department, updated_at FROM {table_name} ORDER BY email")
             members = []
             for r in acc_result.get("data", {}).get("rows", []):
                 email = r.get("email", "")
@@ -593,10 +593,37 @@ def run(config, modules):
                 elif name and email not in api_map:
                     diff = "API无此账号"
                 members.append({"email": email, "name": name,
-                                "department": r.get("department", ""), "diff": diff})
+                                "department": r.get("department", ""),
+                                "updated_at": r.get("updated_at") or "", "diff": diff})
             return {"members": members, "summary": {"last_updated": _shared_data.get("last_updated")}}
 
         web_mod.register_handler("/api/accounts", "POST", _get_accounts_snapshot)
+
+        def handle_account_update(request_info):
+            """手工编辑账号的姓名和部门。"""
+            body = request_info.get("body", "{}")
+            try:
+                data = json.loads(body) if isinstance(body, str) else body
+            except json.JSONDecodeError:
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": "Invalid JSON"}, ensure_ascii=False)}
+            table_map = {"qoder": "qoder_accounts", "qoder_cn": "qoder_cn_accounts"}
+            table = table_map.get(data.get("org", ""))
+            email = (data.get("email") or "").strip()
+            if not table or not email:
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": "org 或 email 无效"}, ensure_ascii=False)}
+            name = (data.get("name") or "").strip()
+            department = (data.get("department") or "").strip()
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql=f"UPDATE {table} SET name = ?, department = ?, updated_at = ? WHERE email = ?",
+                params=(name, department,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
+            _log(f"账号编辑: {table} {email} name={name} department={department}")
+            return {"status_code": 200, "content_type": "application/json; charset=utf-8",
+                    "body": json.dumps({"success": True}, ensure_ascii=False)}
+
+        web_mod.register_handler("/api/account-update", "POST", handle_account_update)
 
         def handle_usage(request_info):
             """返回两个组织的完整用量数据（从 SQLite 读取）。"""
