@@ -128,7 +128,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
   <div id="tab-accounts">
     <div class="updated" id="acc-updated">加载中...</div>
     <div class="search-row">
-      <input class="search-box" id="acc-search" type="text" placeholder="搜索邮箱...">
+      <input class="search-box" id="acc-search" type="text" placeholder="搜索姓名或邮箱...">
     </div>
     <div class="table-wrap">
       <table>
@@ -144,7 +144,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
   <div id="tab-accounts-cn" style="display:none">
     <div class="updated" id="cn-updated">加载中...</div>
     <div class="search-row">
-      <input class="search-box" id="cn-search" type="text" placeholder="搜索邮箱...">
+      <input class="search-box" id="cn-search" type="text" placeholder="搜索姓名或邮箱...">
     </div>
     <div class="table-wrap">
       <table>
@@ -161,6 +161,9 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="updated" id="usage-updated">加载中...</div>
     <h2>Qoder 国际版</h2>
     <div class="stats" id="usage-stats-qoder"></div>
+    <div class="search-row">
+      <input class="search-box" id="usage-search" type="text" placeholder="搜索姓名或邮箱...">
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -180,6 +183,9 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     </div>
     <h2>Qoder CN</h2>
     <div class="stats" id="usage-stats-cn"></div>
+    <div class="search-row">
+      <input class="search-box" id="usage-search-cn" type="text" placeholder="搜索姓名或邮箱...">
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -410,6 +416,12 @@ function renderUsageOrg(org, tbodyId) {
   const data = usageData ? (usageData[org] || {}) : {};
   let members = data.members || [];
 
+  // 姓名或邮箱模糊搜索
+  const searchId = tbodyId === 'usage-tbody' ? 'usage-search' : 'usage-search-cn';
+  const searchEl = document.getElementById(searchId);
+  const q = searchEl ? searchEl.value.toLowerCase() : '';
+  if (q) members = members.filter(m => (m.email||'').toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q));
+
   if (!members.length) {
     document.getElementById(tbodyId).innerHTML = '<tr><td colspan="10" class="empty-state">暂无数据</td></tr>';
     return;
@@ -490,6 +502,8 @@ async function updateAddonCap(org, email, currentLimit) {
 
 document.getElementById('acc-search').addEventListener('input', () => renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search'));
 document.getElementById('cn-search').addEventListener('input', () => renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search'));
+document.getElementById('usage-search').addEventListener('input', () => renderUsageOrg('qoder', 'usage-tbody'));
+document.getElementById('usage-search-cn').addEventListener('input', () => renderUsageOrg('qoder_cn', 'usage-tbody-cn'));
 
 // ── AI 代码统计 ──
 let aiMembers = [];
