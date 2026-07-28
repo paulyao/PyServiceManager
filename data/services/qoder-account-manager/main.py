@@ -642,6 +642,10 @@ def run(config, modules):
             if role not in ("开发", "测试", "运维", "产品", "营销"):
                 return {"status_code": 400, "content_type": "application/json; charset=utf-8",
                         "body": json.dumps({"success": False, "error": f"不支持的角色: {role}"}, ensure_ascii=False)}
+            # 本地表无此邮箱时先插入（如 API 有但本地没有的账号）
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql=f"INSERT OR IGNORE INTO {table} (email) VALUES (?)",
+                params=(email,), commit=True)
             sqlite_mod.execute(db_path=_DB_FILE,
                 sql=f"UPDATE {table} SET name = ?, department = ?, role = ?, updated_at = ? WHERE email = ?",
                 params=(name, department, role,

@@ -329,7 +329,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
         '<td class="name-cell">' + esc(m.name) + '</td>' +
         '<td class="dept-cell">-</td><td>-</td><td>-</td>' +
         '<td>' + diffBadge + '</td>' +
-        '<td>' + delBtn + '</td></tr>';
+        '<td><button class="btn-edit" onclick="startEditAccount(\'' + org + '\',\'' + esc(m.email) + '\')">编辑</button>' + delBtn + '</td></tr>';
     }
     return '<tr>' +
       '<td class="email-cell">' + esc(m.email) + '</td>' +
