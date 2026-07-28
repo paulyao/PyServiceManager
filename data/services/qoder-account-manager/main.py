@@ -153,9 +153,22 @@ def run(config, modules):
             unit TEXT,
             status TEXT, next_reset_at TEXT, collected_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS qoder_accounts (
-            email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '', updated_at TEXT)""", commit=True)
+            email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '',
+            role TEXT DEFAULT '开发', updated_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS qoder_cn_accounts (
-            email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '', updated_at TEXT)""", commit=True)
+            email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '',
+            role TEXT DEFAULT '开发', updated_at TEXT)""", commit=True)
+        # 迁移：旧账号表补充 role 列
+        for _tbl in ("qoder_accounts", "qoder_cn_accounts"):
+            try:
+                cols = sqlite_mod.query(db_path=_DB_FILE, sql=f"PRAGMA table_info({_tbl})")
+                col_names = [c.get("name", "") for c in cols.get("data", {}).get("rows", [])]
+                if col_names and "role" not in col_names:
+                    sqlite_mod.execute(db_path=_DB_FILE,
+                        sql=f"ALTER TABLE {_tbl} ADD COLUMN role TEXT DEFAULT '开发'", commit=True)
+                    _log(f"{_tbl} 已新增 role 列")
+            except Exception as e:
+                _log(f"{_tbl} role 列迁移失败: {e}", "WARN")
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS ai_code_ranking (
             user_id TEXT, email TEXT, display_name TEXT,
             total_lines_added INTEGER, ai_lines_added INTEGER,
@@ -185,9 +198,9 @@ def run(config, modules):
         qoder_rows = [(f"ai{i:02d}@wsgjp.com", "", "", None) for i in range(1, 100)]
         cn_rows = [(f"ai_cn{i:02d}@wsgjp.com", "", "", None) for i in range(1, 100)]
         sqlite_mod.batch_insert(db_path=_DB_FILE,
-            sql="INSERT OR IGNORE INTO qoder_accounts VALUES (?,?,?,?)", rows=qoder_rows)
+            sql="INSERT OR IGNORE INTO qoder_accounts (email, name, department, updated_at) VALUES (?,?,?,?)", rows=qoder_rows)
         sqlite_mod.batch_insert(db_path=_DB_FILE,
-            sql="INSERT OR IGNORE INTO qoder_cn_accounts VALUES (?,?,?,?)", rows=cn_rows)
+            sql="INSERT OR IGNORE INTO qoder_cn_accounts (email, name, department, updated_at) VALUES (?,?,?,?)", rows=cn_rows)
         _log(f"预置账号: qoder {len(qoder_rows)} 条, qoder_cn {len(cn_rows)} 条")
 
     def _import_excel(excel_path, table_name):
@@ -581,7 +594,7 @@ def run(config, modules):
         def _build_account_data(table_name, api_map):
             """构建单个组织的账号数据。"""
             acc_result = sqlite_mod.query(db_path=_DB_FILE,
-                sql=f"SELECT email, name, department, updated_at FROM {table_name} ORDER BY email")
+                sql=f"SELECT email, name, department, role, updated_at FROM {table_name} ORDER BY email")
             members = []
             for r in acc_result.get("data", {}).get("rows", []):
                 email = r.get("email", "")
@@ -594,6 +607,7 @@ def run(config, modules):
                     diff = "API无此账号"
                 members.append({"email": email, "name": name,
                                 "department": r.get("department", ""),
+                                "role": r.get("role") or "开发",
                                 "updated_at": r.get("updated_at") or "", "diff": diff})
             return {"members": members, "summary": {"last_updated": _shared_data.get("last_updated")}}
 
@@ -615,11 +629,15 @@ def run(config, modules):
                         "body": json.dumps({"success": False, "error": "org 或 email 无效"}, ensure_ascii=False)}
             name = (data.get("name") or "").strip()
             department = (data.get("department") or "").strip()
+            role = (data.get("role") or "开发").strip()
+            if role not in ("开发", "测试", "运维", "产品", "营销"):
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": f"不支持的角色: {role}"}, ensure_ascii=False)}
             sqlite_mod.execute(db_path=_DB_FILE,
-                sql=f"UPDATE {table} SET name = ?, department = ?, updated_at = ? WHERE email = ?",
-                params=(name, department,
+                sql=f"UPDATE {table} SET name = ?, department = ?, role = ?, updated_at = ? WHERE email = ?",
+                params=(name, department, role,
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
-            _log(f"账号编辑: {table} {email} name={name} department={department}")
+            _log(f"账号编辑: {table} {email} name={name} department={department} role={role}")
             return {"status_code": 200, "content_type": "application/json; charset=utf-8",
                     "body": json.dumps({"success": True}, ensure_ascii=False)}
 
