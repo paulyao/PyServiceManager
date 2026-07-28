@@ -169,7 +169,6 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
           <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
           <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
-          <th class="sortable" onclick="sortUsage('status')">状态</th>
           <th>修改配额</th>
         </tr></thead>
         <tbody id="usage-tbody"></tbody>
@@ -189,7 +188,6 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
           <th class="sortable" onclick="sortUsage('totalUsed')">总计已用</th>
           <th class="sortable" onclick="sortUsage('totalLimit')">总计额度</th>
           <th class="sortable" onclick="sortUsage('usageRate')">使用率</th>
-          <th class="sortable" onclick="sortUsage('status')">状态</th>
           <th>修改配额</th>
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
@@ -402,7 +400,7 @@ function renderUsageOrg(org, tbodyId) {
   let members = data.members || [];
 
   if (!members.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="11" class="empty-state">暂无数据</td></tr>';
+    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="10" class="empty-state">暂无数据</td></tr>';
     return;
   }
   // 计算总计（Plan + 共享）和使用率
@@ -427,9 +425,6 @@ function renderUsageOrg(org, tbodyId) {
     const totalUsed = m.totalUsed || 0;
     const pct = totalLimit > 0 ? (totalUsed / totalLimit * 100) : 0;
     const bc = barClass(pct);
-    const badge = m.status === 'restricted' ? '<span class="badge restricted">restricted</span>'
-      : m.status === 'active' ? '<span class="badge active">active</span>'
-      : '<span class="badge other">' + esc(m.status||'unknown') + '</span>';
     return '<tr>' +
       '<td class="email-cell">' + esc(m.email) + '</td>' +
       '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
@@ -440,7 +435,6 @@ function renderUsageOrg(org, tbodyId) {
       '<td>' + fmt(m.totalUsed||0) + '</td>' +
       '<td>' + fmt(m.totalLimit||0) + '</td>' +
       '<td><div class="bar-wrap"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div>' + pct.toFixed(1) + '%</td>' +
-      '<td>' + badge + '</td>' +
       '<td><button class="btn-edit" onclick="updateAddonCap(\'' + org + '\',\'' + esc(m.email) + '\',' + (m.sharedLimit||0) + ')">修改配额</button></td></tr>';
   });
   document.getElementById(tbodyId).innerHTML = rows.join('');
