@@ -177,18 +177,14 @@ def run(config, modules):
 
     # ── Web 路由处理器 ──
 
-    def handle_health(request_info):
-        """GET / — 健康检查"""
+    def handle_health():
+        """GET / — 健康检查（register_api 无参回调，返回 dict 自动包装）"""
         llm_cfg = _state["config"].get("llm", {})
-        return _json_response(200, {
-            "success": True,
-            "data": {
-                "status": "ok",
-                "model": llm_cfg.get("model", "deepseek-v3"),
-                "api_key_configured": bool(llm_cfg.get("api_key")),
-            },
-            "error": None,
-        })
+        return {
+            "status": "ok",
+            "model": llm_cfg.get("model", "deepseek-v3"),
+            "api_key_configured": bool(llm_cfg.get("api_key")),
+        }
 
     def handle_chat(request_info):
         """POST /chat — 通用 LLM 代理"""
@@ -256,7 +252,7 @@ def run(config, modules):
     # ── 注册 Web 路由（通过 web-service 模块） ──
     web_mod = modules.get("web-service")
     if web_mod:
-        web_mod.register_handler("/", "GET", handle_health)
+        web_mod.register_api("/", handle_health)
         web_mod.register_handler("/chat", "POST", handle_chat)
         web_mod.register_handler("/get-license", "POST", handle_get_license)
 

@@ -1,0 +1,14 @@
+# Configuration for service: heartbeat
+[interval]
+seconds = 10
+
+[message]
+text = "Hello from heartbeat"
+
+# 示例4 mysql-helper 的演示连接参数（host 为空则跳过真实调用）
+[demo.mysql]
+host = ""
+port = 3306
+user = ""
+password = ""
+database = ""
