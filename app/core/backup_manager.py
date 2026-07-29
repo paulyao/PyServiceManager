@@ -24,10 +24,12 @@ from app.utils.validation import validate_service_name
 logger = logging.getLogger(__name__)
 
 # Files/dirs to exclude from service backup (auto-generated)
-_SERVICE_EXCLUDE = {"runner.py", "runner.log", ".pid", ".modules.json", "__pycache__"}
+_SERVICE_EXCLUDE = {"runner.py", "runner.log", ".pid", ".modules.json", "__pycache__", ".web-service"}
 _MODULE_EXCLUDE = {"__pycache__"}
 # Runtime/generated files excluded from extra-file collection by suffix
 _EXCLUDE_SUFFIXES = {".log", ".pid", ".pyc", ".service"}
+# Hidden junk entries excluded by exact name (other dotfiles like .qoder.db are kept)
+_HIDDEN_JUNK = {".DS_Store", ".git", ".venv"}
 # Skip auxiliary files larger than this (avoid huge in-memory archives)
 _MAX_EXTRA_FILE_SIZE = 100 * 1024 * 1024
 
@@ -81,8 +83,9 @@ class BackupManager:
                 continue
             rel = path.relative_to(base_dir)
             parts = rel.parts
-            # Skip excluded names anywhere in the path and hidden files/dirs (.pid, .DS_Store, ...)
-            if any(p in exclude_names or p.startswith(".") for p in parts):
+            # Skip excluded names anywhere in the path and known hidden junk (.DS_Store, .git, ...)
+            # Note: dotfiles are NOT blanket-excluded — services keep data in files like .qoder.db
+            if any(p in exclude_names or p in _HIDDEN_JUNK for p in parts):
                 continue
             if path.suffix in _EXCLUDE_SUFFIXES:
                 continue
@@ -625,9 +628,9 @@ class BackupManager:
                             ServiceModule.module_id == local_mod.id,
                         )
                     )
-                    if existing_binding.scalar_one_or_none():
+                    existing_bind = existing_binding.scalar_one_or_none()
+                    if existing_bind:
                         # Update existing binding
-                        existing_bind = existing_binding.scalar_one()
                         existing_bind.enabled = binding.enabled
                         existing_bind.load_order = binding.load_order
                     else:
@@ -650,6 +653,9 @@ class BackupManager:
                 except Exception as e:
                     result.errors.append(
                         f"恢复绑定 '{effective_svc_name}' → '{binding.module_name}' 失败: {str(e)}"
+                    )
+                    logger.exception(
+                        "Failed to restore binding '%s' -> '%s'", effective_svc_name, binding.module_name
                     )
 
             # Refresh .modules.json for this service
