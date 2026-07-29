@@ -1,0 +1,12 @@
+# LLM API 代理服务配置
+
+[llm]
+api_key = ""                 # DashScope API Key（必填，不入库源码）
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "deepseek-v3"        # 默认模型，/chat 可通过请求体覆盖
+temperature = 0.7
+max_tokens = 0               # 0 表示不限制
+
+[retry]
+max_retries = 3
+retry_delay = 2              # 初始重试间隔秒数，指数退避
