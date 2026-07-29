@@ -26,9 +26,14 @@ logger = logging.getLogger(__name__)
 # Files/dirs to exclude from service backup (auto-generated)
 _SERVICE_EXCLUDE = {"runner.py", "runner.log", ".pid", ".modules.json", "__pycache__"}
 _MODULE_EXCLUDE = {"__pycache__"}
+# Runtime/generated files excluded from extra-file collection by suffix
+_EXCLUDE_SUFFIXES = {".log", ".pid", ".pyc", ".service"}
+# Skip auxiliary files larger than this (avoid huge in-memory archives)
+_MAX_EXTRA_FILE_SIZE = 100 * 1024 * 1024
 
 # Supported backup manifest version
-_BACKUP_VERSION = "1.0"
+_BACKUP_VERSION = "1.1"
+_SUPPORTED_VERSIONS = {"1.0", "1.1"}
 
 
 class BackupManagerError(Exception):
@@ -63,6 +68,35 @@ class BackupManager:
         if name.startswith("/") or ".." in name.split("/"):
             return False
         return True
+
+    @staticmethod
+    def _collect_extra_files(base_dir: Path, exclude_names: set[str], known_files: set[str]) -> list[Path]:
+        """Recursively collect auxiliary files (sqlite db, html pages, extra scripts, etc.)
+        under base_dir, excluding auto-generated/runtime files and known primary files."""
+        extras: list[Path] = []
+        if not base_dir.is_dir():
+            return extras
+        for path in sorted(base_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(base_dir)
+            parts = rel.parts
+            # Skip excluded names anywhere in the path and hidden files/dirs (.pid, .DS_Store, ...)
+            if any(p in exclude_names or p.startswith(".") for p in parts):
+                continue
+            if path.suffix in _EXCLUDE_SUFFIXES:
+                continue
+            # Skip primary files already backed up explicitly (top-level only)
+            if len(parts) == 1 and parts[0] in known_files:
+                continue
+            try:
+                if path.stat().st_size > _MAX_EXTRA_FILE_SIZE:
+                    logger.warning("Skipping oversized file in backup (>100MB): %s", path)
+                    continue
+            except OSError:
+                continue
+            extras.append(path)
+        return extras
 
     async def get_backup_items(self, session: AsyncSession) -> dict:
         """Get list of modules and services available for backup."""
@@ -125,6 +159,14 @@ class BackupManager:
                         zf.writestr(f"{mod_prefix}/config.toml", config_path.read_text(encoding="utf-8"))
                         has_config = True
 
+                # Write auxiliary files (e.g. daemon scripts) under files/
+                mod_extra_files: list[str] = []
+                module_dir = script_path.parent
+                for extra in self._collect_extra_files(module_dir, _MODULE_EXCLUDE, {"module.py", "config.toml"}):
+                    rel = extra.relative_to(module_dir).as_posix()
+                    zf.writestr(f"{mod_prefix}/files/{rel}", extra.read_bytes())
+                    mod_extra_files.append(rel)
+
                 # Write meta.json
                 meta = {
                     "name": mod.name,
@@ -134,6 +176,7 @@ class BackupManager:
                     "author": mod.author,
                     "code_source": mod.code_source,
                     "requirements": mod.requirements_list,
+                    "extra_files": mod_extra_files,
                 }
                 zf.writestr(f"{mod_prefix}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
@@ -147,6 +190,7 @@ class BackupManager:
                     requirements=mod.requirements_list,
                     is_builtin=False,
                     has_config=has_config,
+                    extra_files=mod_extra_files,
                 ))
 
             # ── Backup Services ──
@@ -170,6 +214,13 @@ class BackupManager:
                 config_path = service_dir / "config.toml"
                 if config_path.exists():
                     zf.writestr(f"{svc_prefix}/config.toml", config_path.read_text(encoding="utf-8"))
+
+                # Write auxiliary files (sqlite db, html pages, extra scripts, etc.) under files/
+                svc_extra_files: list[str] = []
+                for extra in self._collect_extra_files(service_dir, _SERVICE_EXCLUDE, {"main.py", "config.toml"}):
+                    rel = extra.relative_to(service_dir).as_posix()
+                    zf.writestr(f"{svc_prefix}/files/{rel}", extra.read_bytes())
+                    svc_extra_files.append(rel)
 
                 # Collect bindings
                 bindings: list[BindingInfo] = []
@@ -199,6 +250,7 @@ class BackupManager:
                     "requirements": svc.requirements_list,
                     "remarks": svc.remarks,
                     "bindings": [b.model_dump() for b in bindings],
+                    "extra_files": svc_extra_files,
                 }
                 zf.writestr(f"{svc_prefix}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
@@ -211,6 +263,7 @@ class BackupManager:
                     requirements=svc.requirements_list,
                     remarks=svc.remarks,
                     bindings=bindings,
+                    extra_files=svc_extra_files,
                 ))
 
             # ── Write manifest.json ──
@@ -295,6 +348,7 @@ class BackupManager:
 
         # Read all ZIP entries into memory
         entries = self._read_zip_entries(zip_bytes)
+        binary_entries = self._read_zip_binary_entries(zip_bytes)
 
         # ── Phase 1: Restore Modules ──
         for mod_info in manifest.modules:
@@ -356,6 +410,10 @@ class BackupManager:
                 # Write config.toml
                 if config_toml is not None:
                     (module_dir / "config.toml").write_text(config_toml, encoding="utf-8")
+
+                # Restore auxiliary files (binary-safe)
+                extra_warnings = self._restore_extra_files(binary_entries, f"{mod_prefix}/files/", module_dir)
+                result.warnings.extend(f"模块 '{effective_name}': {w}" for w in extra_warnings)
 
                 if local_mod and strategy == "overwrite":
                     # Update existing module metadata
@@ -456,6 +514,10 @@ class BackupManager:
                 # Write config.toml
                 if config is not None:
                     (service_dir / "config.toml").write_text(config, encoding="utf-8")
+
+                # Restore auxiliary files (sqlite db, html pages, etc., binary-safe)
+                extra_warnings = self._restore_extra_files(binary_entries, f"{svc_prefix}/files/", service_dir)
+                result.warnings.extend(f"服务 '{effective_name}': {w}" for w in extra_warnings)
 
                 # Resolve python_path for this machine
                 resolved_python = DEFAULT_PYTHON_PATH
@@ -620,9 +682,9 @@ class BackupManager:
                 manifest_data = json.loads(zf.read("manifest.json"))
                 manifest = BackupManifest.model_validate(manifest_data)
 
-                if manifest.version != _BACKUP_VERSION:
+                if manifest.version not in _SUPPORTED_VERSIONS:
                     raise BackupManagerError(
-                        f"备份版本 '{manifest.version}' 不受支持，当前支持版本: {_BACKUP_VERSION}"
+                        f"备份版本 '{manifest.version}' 不受支持，当前支持版本: {', '.join(sorted(_SUPPORTED_VERSIONS))}"
                     )
 
                 return manifest
@@ -634,7 +696,7 @@ class BackupManager:
             raise BackupManagerError(f"读取备份文件失败: {str(e)}")
 
     def _read_zip_entries(self, zip_bytes: bytes) -> dict[str, str]:
-        """Read all text entries from ZIP into a dict. Skips directories."""
+        """Read all text entries from ZIP into a dict. Skips directories and auxiliary files."""
         entries = {}
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             for info in zf.infolist():
@@ -642,11 +704,47 @@ class BackupManager:
                     continue
                 if not self._validate_zip_path(info.filename):
                     continue
+                # Auxiliary files may be binary; handled by _read_zip_binary_entries
+                if "/files/" in info.filename:
+                    continue
                 try:
                     entries[info.filename] = zf.read(info.filename).decode("utf-8")
                 except UnicodeDecodeError:
                     logger.warning("Skipping non-text entry in backup: %s", info.filename)
         return entries
+
+    def _read_zip_binary_entries(self, zip_bytes: bytes) -> dict[str, bytes]:
+        """Read auxiliary file entries (under */files/) from ZIP as raw bytes."""
+        entries: dict[str, bytes] = {}
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                if not self._validate_zip_path(info.filename):
+                    continue
+                if "/files/" in info.filename:
+                    entries[info.filename] = zf.read(info.filename)
+        return entries
+
+    @staticmethod
+    def _restore_extra_files(binary_entries: dict[str, bytes], zip_prefix: str, target_dir: Path) -> list[str]:
+        """Write auxiliary files from ZIP entries under zip_prefix into target_dir.
+        Returns warning messages for failed files."""
+        warnings: list[str] = []
+        for entry_name, data in binary_entries.items():
+            if not entry_name.startswith(zip_prefix):
+                continue
+            rel = entry_name[len(zip_prefix):]
+            if not rel:
+                continue
+            try:
+                dest = target_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+            except Exception as e:
+                warnings.append(f"附属文件 '{rel}' 恢复失败: {str(e)}")
+                logger.exception("Failed to restore extra file '%s' to %s", rel, target_dir)
+        return warnings
 
     async def _write_modules_registry(self, session: AsyncSession, service: Service) -> None:
         """Write .modules.json for a service (mirrors ModuleManager logic)."""

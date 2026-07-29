@@ -286,6 +286,8 @@ function renderPreviewResult(data) {
 
     const moduleConflicts = c.modules.filter(x => x.conflict_type !== 'builtin').length;
     const serviceConflicts = c.services.length;
+    const extraFileCount = [...m.modules, ...m.services]
+        .reduce((n, x) => n + (x.extra_files ? x.extra_files.length : 0), 0);
 
     area.innerHTML = `
         <div class="backup-preview-summary">
@@ -296,6 +298,10 @@ function renderPreviewResult(data) {
             <div class="backup-preview-stat">
                 <span>🔧</span>
                 <div><div class="count">${m.services.length}</div>服务</div>
+            </div>
+            <div class="backup-preview-stat">
+                <span>📎</span>
+                <div><div class="count">${extraFileCount}</div>附属文件</div>
             </div>
             <div class="backup-preview-stat ${moduleConflicts > 0 ? 'conflict' : ''}">
                 <span>⚠️</span>

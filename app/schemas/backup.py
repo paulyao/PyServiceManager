@@ -55,6 +55,7 @@ class ManifestModule(BaseModel):
     requirements: list[str] = Field(default_factory=list)
     is_builtin: bool = False
     has_config: bool = False
+    extra_files: list[str] = Field(default_factory=list, description="Auxiliary files (relative paths) bundled besides module.py/config.toml")
 
 
 class ManifestService(BaseModel):
@@ -67,11 +68,12 @@ class ManifestService(BaseModel):
     requirements: list[str] = Field(default_factory=list)
     remarks: str | None = None
     bindings: list[BindingInfo] = Field(default_factory=list)
+    extra_files: list[str] = Field(default_factory=list, description="Auxiliary files (relative paths) bundled besides main.py/config.toml, e.g. sqlite db, html pages")
 
 
 class BackupManifest(BaseModel):
     """Top-level manifest.json structure."""
-    version: str = "1.0"
+    version: str = "1.1"
     app_version: str = "0.1.0"
     created_at: str
     source_host: str = "unknown"
