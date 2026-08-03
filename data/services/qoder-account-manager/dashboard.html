@@ -54,6 +54,11 @@ tr:hover { background: #f8fafc; }
 .badge.diff { background: #fef3c7; color: #92400e; }
 .badge.missing { background: #fee2e2; color: #991b1b; }
 .badge.local-missing { background: #dbeafe; color: #1e40af; }
+.badge.role-dev { background: #dbeafe; color: #1e40af; }
+.badge.role-test { background: #d1fae5; color: #065f46; }
+.badge.role-ops { background: #ffedd5; color: #9a3412; }
+.badge.role-pm { background: #ede9fe; color: #5b21b6; }
+.badge.role-mkt { background: #fce7f3; color: #9d174d; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text3); }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
 .updated { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
@@ -313,6 +318,9 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
     else if (m.diff === 'API无此账号') diffBadge = '<span class="badge missing">API无此账号</span>';
     else if (m.diff === '本地无此账号') diffBadge = '<span class="badge local-missing">本地无此账号</span>';
     const role = m.role || '开发';
+    const roleClassMap = {'开发': 'role-dev', '测试': 'role-test', '运维': 'role-ops', '产品': 'role-pm', '营销': 'role-mkt'};
+    const roleBadge = roleClassMap[role]
+      ? '<span class="badge ' + roleClassMap[role] + '">' + esc(role) + '</span>' : esc(role);
     const isEditing = editingAccount && editingAccount.org === org && editingAccount.email === m.email;
     if (isEditing) {
       const options = ROLES.map(r =>
@@ -340,7 +348,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
       '<td class="email-cell">' + esc(m.email) + '</td>' +
       '<td class="name-cell">' + esc(m.name) + '</td>' +
       '<td class="dept-cell" title="' + esc(m.department || '') + '">' + esc(m.department || '-') + '</td>' +
-      '<td>' + esc(role) + '</td>' +
+      '<td>' + roleBadge + '</td>' +
       '<td>' + esc(m.updated_at || '-') + '</td>' +
       '<td>' + diffBadge + '</td>' +
       '<td><button class="btn-edit" onclick="startEditAccount(\'' + org + '\',\'' + esc(m.email) + '\')">编辑</button>' + delBtn + '</td></tr>';
