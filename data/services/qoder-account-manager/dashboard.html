@@ -109,6 +109,9 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
 .btn-delete { padding: 4px 12px; border: 1px solid #fca5a5; background: var(--card); border-radius: 6px;
   cursor: pointer; font-size: 12px; font-weight: 500; color: #dc2626; margin-left: 6px; transition: all 0.2s; }
 .btn-delete:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
+.btn-export { padding: 6px 14px; border: 1px solid var(--blue-light); background: var(--card); border-radius: 6px;
+  cursor: pointer; font-size: 13px; font-weight: 500; color: var(--blue); margin-left: 10px; transition: all 0.2s; }
+.btn-export:hover { background: var(--blue); color: #fff; }
 .edit-input { width: 110px; padding: 5px 8px; border: 1px solid var(--blue-light); border-radius: 6px;
   font-size: 13px; outline: none; }
 .edit-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
@@ -133,6 +136,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="updated" id="acc-updated">加载中...</div>
     <div class="search-row">
       <input class="search-box" id="acc-search" type="text" placeholder="搜索姓名或邮箱...">
+      <button class="btn-export" onclick="exportAccounts('qoder')">导出 Excel</button>
     </div>
     <div class="table-wrap">
       <table>
@@ -149,6 +153,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="updated" id="cn-updated">加载中...</div>
     <div class="search-row">
       <input class="search-box" id="cn-search" type="text" placeholder="搜索姓名或邮箱...">
+      <button class="btn-export" onclick="exportAccounts('qoder_cn')">导出 Excel</button>
     </div>
     <div class="table-wrap">
       <table>
@@ -376,6 +381,30 @@ async function saveAccount() {
     editingAccount = null;
     fetchAccounts();
   } catch(e) { alert('保存失败: ' + e); }
+}
+
+async function exportAccounts(org) {
+  try {
+    const r = await fetch(base + 'api/export-accounts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({org: org})
+    });
+    const ct = r.headers.get('Content-Type') || '';
+    if (!ct.includes('spreadsheetml')) {
+      const d = await r.json().catch(() => ({}));
+      alert('导出失败: ' + (d.error || '未知错误'));
+      return;
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const now = new Date();
+    const ds = now.getFullYear() + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
+    a.download = (org === 'qoder' ? 'Qoder账号列表' : 'Qoder_CN账号列表') + '_' + ds + '.xlsx';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch(e) { alert('导出失败: ' + e); }
 }
 
 async function deleteAccount(org, email) {

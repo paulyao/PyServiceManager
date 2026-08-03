@@ -12,6 +12,7 @@
 
 依赖模块：http-client, ss-omc-sdk, log-enhancer, web-service, sqlite-helper
 """
+import io
 import json
 import logging
 import os
@@ -707,6 +708,51 @@ def run(config, modules):
                 "message": f"删除成功：本地数据已清空，成员已从组织移除"})
 
         web_mod.register_handler("/api/account-delete", "POST", handle_account_delete)
+
+        def handle_export_accounts(request_info):
+            """导出账号列表为 Excel（xlsx 字节流）。"""
+            body = request_info.get("body", "{}")
+            try:
+                data = json.loads(body) if isinstance(body, str) else body
+            except json.JSONDecodeError:
+                data = {}
+            org = data.get("org", "")
+            if org == "qoder":
+                table, sheet_name = "qoder_accounts", "Qoder 账号"
+                map_key = "api_members"
+            elif org == "qoder_cn":
+                table, sheet_name = "qoder_cn_accounts", "Qoder CN 账号"
+                map_key = "api_members_cn"
+            else:
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": f"不支持的 org: {org}"}, ensure_ascii=False)}
+            try:
+                with _data_lock:
+                    api_map = dict(_shared_data.get(map_key, {}))
+                acc_data = _build_account_data(table, api_map)
+                members = acc_data.get("members", [])
+                from openpyxl import Workbook
+                wb = Workbook()
+                ws = wb.active
+                ws.title = sheet_name
+                ws.append(["邮箱", "姓名", "部门", "角色", "更新时间", "差异"])
+                for m in members:
+                    ws.append([m.get("email", ""), m.get("name", ""), m.get("department", ""),
+                               m.get("role", ""), m.get("updated_at", ""), m.get("diff") or ""])
+                for col, width in zip("ABCDEF", (32, 14, 18, 10, 20, 14)):
+                    ws.column_dimensions[col].width = width
+                buf = io.BytesIO()
+                wb.save(buf)
+                _log(f"导出账号列表 {sheet_name}: {len(members)} 条")
+                return {"status_code": 200,
+                        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "body": buf.getvalue()}
+            except Exception as e:
+                _log(f"导出账号列表失败: {e}", "ERROR")
+                return {"status_code": 500, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)}
+
+        web_mod.register_handler("/api/export-accounts", "POST", handle_export_accounts)
 
         def handle_usage(request_info):
             """返回两个组织的完整用量数据（从 SQLite 读取）。"""
