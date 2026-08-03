@@ -5,7 +5,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -297,7 +297,10 @@ class ModuleManager:
         if module_dir.exists():
             shutil.rmtree(module_dir)
 
-        # Delete DB record (cascades service_modules)
+        # Explicitly remove service bindings first (do not rely on DB cascade alone)
+        await session.execute(delete(ServiceModule).where(ServiceModule.module_id == module.id))
+
+        # Delete DB record
         await session.delete(module)
         try:
             await session.commit()

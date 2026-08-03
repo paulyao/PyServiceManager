@@ -1,5 +1,5 @@
 """Database connection and initialization."""
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -7,6 +7,15 @@ from app.config import DB_PATH
 
 engine = create_async_engine(f"sqlite+aiosqlite:///{DB_PATH}", echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _enable_sqlite_fk(dbapi_conn, connection_record):
+    """SQLite disables foreign key enforcement by default; enable it per connection
+    so ON DELETE CASCADE on service_modules actually works."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 class Base(DeclarativeBase):
@@ -61,6 +70,14 @@ async def init_db():
             await conn.execute(text(
                 "ALTER TABLE services ADD COLUMN remarks TEXT DEFAULT NULL"
             ))
+        # Migration: purge orphan service-module bindings left over before
+        # foreign key enforcement was enabled (idempotent, safe to run always)
+        await conn.execute(text(
+            "DELETE FROM service_modules WHERE service_id NOT IN (SELECT id FROM services)"
+        ))
+        await conn.execute(text(
+            "DELETE FROM service_modules WHERE module_id NOT IN (SELECT id FROM modules)"
+        ))
 
 
 async def get_session() -> AsyncSession:
