@@ -158,16 +158,20 @@ def run(config, modules):
             role TEXT DEFAULT '开发', updated_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS qoder_cn_accounts (
             email TEXT PRIMARY KEY, name TEXT DEFAULT '', department TEXT DEFAULT '',
-            role TEXT DEFAULT '开发', updated_at TEXT)""", commit=True)
-        # 迁移：旧账号表补充 role 列
-        for _tbl in ("qoder_accounts", "qoder_cn_accounts"):
+            role TEXT DEFAULT '营销', updated_at TEXT)""", commit=True)
+        # 迁移：旧账号表补充 role 列（默认角色：qoder=开发，qoder_cn=营销）
+        for _tbl, _default_role in (("qoder_accounts", "开发"), ("qoder_cn_accounts", "营销")):
             try:
                 cols = sqlite_mod.query(db_path=_DB_FILE, sql=f"PRAGMA table_info({_tbl})")
                 col_names = [c.get("name", "") for c in cols.get("data", {}).get("rows", [])]
                 if col_names and "role" not in col_names:
                     sqlite_mod.execute(db_path=_DB_FILE,
-                        sql=f"ALTER TABLE {_tbl} ADD COLUMN role TEXT DEFAULT '开发'", commit=True)
-                    _log(f"{_tbl} 已新增 role 列")
+                        sql=f"ALTER TABLE {_tbl} ADD COLUMN role TEXT DEFAULT '{_default_role}'", commit=True)
+                    _log(f"{_tbl} 已新增 role 列，默认 {_default_role}")
+                # 早期迁移写入默认开发的历史数据，CN 表统一改为营销
+                if _tbl == "qoder_cn_accounts":
+                    sqlite_mod.execute(db_path=_DB_FILE,
+                        sql=f"UPDATE {_tbl} SET role = '营销' WHERE role IS NULL OR role = '' OR role = '开发'", commit=True)
             except Exception as e:
                 _log(f"{_tbl} role 列迁移失败: {e}", "WARN")
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS ai_code_ranking (
@@ -677,10 +681,11 @@ def run(config, modules):
                 return _resp(400, {"success": False, "error": f"不支持的 org: {org}"})
             if not email:
                 return _resp(400, {"success": False, "error": "email 不能为空"})
-            # 清空本地姓名、部门数据
+            # 清空本地姓名、部门数据（CN 账号默认角色为营销）
+            _default_role = "营销" if org == "qoder_cn" else "开发"
             sqlite_mod.execute(db_path=_DB_FILE,
-                sql=f"UPDATE {table} SET name = '', department = '', role = '开发', updated_at = ? WHERE email = ?",
-                params=(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
+                sql=f"UPDATE {table} SET name = '', department = '', role = ?, updated_at = ? WHERE email = ?",
+                params=(_default_role, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
             # 按邮箱查询成员 ID 并调用 API 删除
             headers = {"Authorization": f"Bearer {key}"}
             result = http_mod.get(f"{base_url}/v1/organizations/{o_id}/members",
