@@ -684,9 +684,18 @@ def run(config, modules):
                 return _resp({"success": False, "error": f"不支持的角色: {role}"})
             # 校验本地是否已存在
             existing = sqlite_mod.query_one(db_path=_DB_FILE,
-                sql=f"SELECT email FROM {table} WHERE email = ?", params=(email,))
-            if existing.get("data", {}).get("row"):
-                return _resp({"success": False, "error": f"本地已存在该邮箱: {email}"})
+                sql=f"SELECT email, name FROM {table} WHERE email = ?", params=(email,))
+            row = existing.get("data", {}).get("row")
+            if row:
+                if row.get("name"):
+                    return _resp({"success": False, "error": f"该邮箱已被占用: {email}"})
+                # 已有邮箱但姓名为空 → 更新记录（认领空闲槽位）
+                sqlite_mod.execute(db_path=_DB_FILE,
+                    sql=f"UPDATE {table} SET name = ?, department = ?, role = ?, updated_at = ? WHERE email = ?",
+                    params=(name, department, role,
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
+                _log(f"账号认领: {table} {email} name={name} department={department} role={role}")
+                return _resp({"success": True})
             sqlite_mod.execute(db_path=_DB_FILE,
                 sql=f"INSERT INTO {table} (email, name, department, role, updated_at) VALUES (?, ?, ?, ?, ?)",
                 params=(email, name, department, role,
