@@ -416,7 +416,7 @@ async function exportAccounts(org) {
 }
 
 async function deleteAccount(org, email) {
-  if (!confirm('确认删除账号 ' + email + ' ？\n将清空本地姓名/部门数据，并从 Qoder 组织中移除该成员！')) return;
+  if (!confirm('确认删除账号 ' + email + ' ？\nAPI 无此账号时将删除本地记录，其他情况仅从 Qoder 组织中移除该成员（本地数据保留）')) return;
   try {
     const r = await fetch(base + 'api/account-delete', {
       method: 'POST',

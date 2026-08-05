@@ -662,7 +662,7 @@ def run(config, modules):
         web_mod.register_handler("/api/account-update", "POST", handle_account_update)
 
         def handle_account_delete(request_info):
-            """删除账号：清空本地姓名/部门，并调用 API 从组织中移除成员。"""
+            """删除账号：API 无此账号时删除本地记录，其他情况仅调用 API 移除成员。"""
             def _resp(status_code, payload):
                 return {"status_code": status_code, "content_type": "application/json; charset=utf-8",
                         "body": json.dumps(payload, ensure_ascii=False)}
@@ -681,36 +681,35 @@ def run(config, modules):
                 return _resp(400, {"success": False, "error": f"不支持的 org: {org}"})
             if not email:
                 return _resp(400, {"success": False, "error": "email 不能为空"})
-            # 清空本地姓名、部门数据（CN 账号默认角色为营销）
-            _default_role = "营销" if org == "qoder_cn" else "开发"
-            sqlite_mod.execute(db_path=_DB_FILE,
-                sql=f"UPDATE {table} SET name = '', department = '', role = ?, updated_at = ? WHERE email = ?",
-                params=(_default_role, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
-            # 按邮箱查询成员 ID 并调用 API 删除
+            # 按邮箱查询成员，判断 API 中是否存在
             headers = {"Authorization": f"Bearer {key}"}
             result = http_mod.get(f"{base_url}/v1/organizations/{o_id}/members",
                 params={"email": email}, headers=headers)
             if not result.get("success"):
-                return _resp(200, {"success": True, "apiDeleted": False,
-                    "message": f"本地数据已清空，但查询 API 成员失败: {result.get('error', 'unknown')}"})
+                return _resp(502, {"success": False,
+                    "error": f"查询 API 成员失败: {result.get('error', 'unknown')}"})
             api_members_list = result.get("json", {}).get("members", [])
             if not api_members_list:
-                return _resp(200, {"success": True, "apiDeleted": False,
-                    "message": "本地数据已清空，API 中无此成员，无需删除"})
+                # API 无此账号：删除本地记录
+                sqlite_mod.execute(db_path=_DB_FILE,
+                    sql=f"DELETE FROM {table} WHERE email = ?", params=(email,), commit=True)
+                _log(f"账号删除: {table} {email} 本地记录已删除（API 无此账号）")
+                return _resp(200, {"success": True,
+                    "message": "API 中无此账号，已删除本地记录"})
+            # API 存在：仅调用 API 移除成员，本地数据保留
             member_id = api_members_list[0].get("id", "")
             del_result = http_mod.delete(
                 f"{base_url}/v1/organizations/{o_id}/members/{member_id}", headers=headers)
             if not del_result.get("success"):
                 err = del_result.get("json", {}).get("message") or del_result.get("error", "unknown")
-                return _resp(200, {"success": True, "apiDeleted": False,
-                    "message": f"本地数据已清空，但 API 删除成员失败: {err}"})
-            _log(f"账号删除: {table} {email} member_id={member_id}")
+                return _resp(200, {"success": False, "error": f"API 删除成员失败: {err}"})
+            _log(f"账号删除: {table} {email} member_id={member_id} 已从组织移除")
             # 同步移除差异比对映射，避免删除后仍显示差异
             key_name = "api_members" if org == "qoder" else "api_members_cn"
             with _data_lock:
                 _shared_data[key_name].pop(email, None)
-            return _resp(200, {"success": True, "apiDeleted": True,
-                "message": f"删除成功：本地数据已清空，成员已从组织移除"})
+            return _resp(200, {"success": True,
+                "message": "删除成功：成员已从组织移除，本地数据保留"})
 
         web_mod.register_handler("/api/account-delete", "POST", handle_account_delete)
 
