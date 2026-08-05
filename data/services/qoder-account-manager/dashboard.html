@@ -141,6 +141,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="updated" id="acc-updated">加载中...</div>
     <div class="search-row">
       <input class="search-box" id="acc-search" type="text" placeholder="搜索姓名或邮箱...">
+      <button class="btn-export" onclick="startAddAccount('qoder')">新增</button>
       <button class="btn-export" onclick="exportAccounts('qoder')">导出 Excel</button>
     </div>
     <div class="table-wrap">
@@ -158,6 +159,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="updated" id="cn-updated">加载中...</div>
     <div class="search-row">
       <input class="search-box" id="cn-search" type="text" placeholder="搜索姓名或邮箱...">
+      <button class="btn-export" onclick="startAddAccount('qoder_cn')">新增</button>
       <button class="btn-export" onclick="exportAccounts('qoder_cn')">导出 Excel</button>
     </div>
     <div class="table-wrap">
@@ -307,11 +309,27 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
 
   document.getElementById(updatedId).textContent = summary.last_updated ? '上次更新: ' + summary.last_updated : '尚未采集';
 
+  const ROLES = ['开发', '测试', '运维', '产品', '营销'];
+  // 新增行内表单
+  let addRowHtml = '';
+  if (addingOrg === org) {
+    const defRole = org === 'qoder_cn' ? '营销' : '开发';
+    const addOptions = ROLES.map(r =>
+      '<option value="' + r + '"' + (r === defRole ? ' selected' : '') + '>' + r + '</option>').join('');
+    addRowHtml = '<tr>' +
+      '<td class="email-cell"><input class="edit-input" id="add-email" placeholder="邮箱（必填）"></td>' +
+      '<td><input class="edit-input" id="add-name" placeholder="姓名"></td>' +
+      '<td><input class="edit-input" id="add-dept" placeholder="部门"></td>' +
+      '<td><select class="edit-select" id="add-role">' + addOptions + '</select></td>' +
+      '<td>-</td><td>-</td>' +
+      '<td><button class="btn-save" onclick="saveNewAccount(\'' + org + '\')">确定</button>' +
+      '<button class="btn-cancel" onclick="cancelAddAccount()">取消</button></td></tr>';
+  }
+
   if (!filtered.length) {
-    document.getElementById(tbodyId).innerHTML = '<tr><td colspan="7" class="empty-state">无匹配账号</td></tr>';
+    document.getElementById(tbodyId).innerHTML = addRowHtml + '<tr><td colspan="7" class="empty-state">无匹配账号</td></tr>';
     return;
   }
-  const ROLES = ['开发', '测试', '运维', '产品', '营销'];
   const rows = filtered.map(m => {
     let diffBadge = '';
     if (m.diff === '名称不一致') diffBadge = '<span class="badge diff">名称不一致</span>';
@@ -353,11 +371,48 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
       '<td>' + diffBadge + '</td>' +
       '<td><button class="btn-edit" onclick="startEditAccount(\'' + org + '\',\'' + esc(m.email) + '\')">编辑</button>' + delBtn + '</td></tr>';
   });
-  document.getElementById(tbodyId).innerHTML = rows.join('');
+  document.getElementById(tbodyId).innerHTML = addRowHtml + rows.join('');
 }
 
 // ── 账号编辑 ──
 let editingAccount = null;
+let addingOrg = null;
+
+function startAddAccount(org) {
+  addingOrg = org;
+  editingAccount = null;
+  renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search');
+  renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search');
+  const input = document.getElementById('add-email');
+  if (input) input.focus();
+}
+
+function cancelAddAccount() {
+  addingOrg = null;
+  renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search');
+  renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search');
+}
+
+async function saveNewAccount(org) {
+  const email = document.getElementById('add-email').value.trim();
+  const name = document.getElementById('add-name').value.trim();
+  const dept = document.getElementById('add-dept').value.trim();
+  const role = document.getElementById('add-role').value;
+  if (!email) { alert('邮箱不能为空'); return; }
+  if (!email.includes('@')) { alert('邮箱格式不正确'); return; }
+  if (!name) { alert('姓名不能为空（否则账号不在列表中显示）'); return; }
+  try {
+    const r = await fetch(base + 'api/account-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({org: org, email: email, name: name, department: dept, role: role})
+    });
+    const d = await r.json();
+    if (!d.success) { alert('新增失败: ' + (d.error || '未知错误')); return; }
+    addingOrg = null;
+    fetchAccounts();
+  } catch(e) { alert('新增失败: ' + e); }
+}
 
 function startEditAccount(org, email) {
   editingAccount = {org, email};

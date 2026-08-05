@@ -661,6 +661,42 @@ def run(config, modules):
 
         web_mod.register_handler("/api/account-update", "POST", handle_account_update)
 
+        def handle_account_add(request_info):
+            """手动新增账号：写入本地数据库。"""
+            body = request_info.get("body", "{}")
+            try:
+                data = json.loads(body) if isinstance(body, str) else body
+            except json.JSONDecodeError:
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": "Invalid JSON"}, ensure_ascii=False)}
+            org = data.get("org", "")
+            table_map = {"qoder": "qoder_accounts", "qoder_cn": "qoder_cn_accounts"}
+            table = table_map.get(org)
+            email = (data.get("email") or "").strip()
+            if not table or not email:
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": "org 或邮箱无效"}, ensure_ascii=False)}
+            name = (data.get("name") or "").strip()
+            department = (data.get("department") or "").strip()
+            role = (data.get("role") or "").strip() or ("营销" if org == "qoder_cn" else "开发")
+            if role not in ("开发", "测试", "运维", "产品", "营销"):
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": f"不支持的角色: {role}"}, ensure_ascii=False)}
+            # 校验本地是否已存在
+            existing = sqlite_mod.query(db_path=_DB_FILE, sql=f"SELECT email FROM {table}")
+            if any(r.get("email") == email for r in existing.get("data", {}).get("rows", [])):
+                return {"status_code": 400, "content_type": "application/json; charset=utf-8",
+                        "body": json.dumps({"success": False, "error": f"本地已存在该邮箱: {email}"}, ensure_ascii=False)}
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql=f"INSERT INTO {table} (email, name, department, role, updated_at) VALUES (?, ?, ?, ?, ?)",
+                params=(email, name, department, role,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")), commit=True)
+            _log(f"账号新增: {table} {email} name={name} department={department} role={role}")
+            return {"status_code": 200, "content_type": "application/json; charset=utf-8",
+                    "body": json.dumps({"success": True}, ensure_ascii=False)}
+
+        web_mod.register_handler("/api/account-add", "POST", handle_account_add)
+
         def handle_account_delete(request_info):
             """删除账号：API 无此账号时删除本地记录，其他情况仅调用 API 移除成员。"""
             def _resp(status_code, payload):
