@@ -216,6 +216,16 @@ class DaemonHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(resp_body)))
                 self.end_headers()
                 self.wfile.write(resp_body)
+        except urllib.error.HTTPError as e:
+            # 回调服务器返回 4xx/5xx 时，透传状态码和响应体（保留真实错误信息）
+            resp_body = e.read()
+            resp_ct = e.headers.get("Content-Type", "application/json; charset=utf-8")
+            _log(f"Callback returned {e.code} for {method} {path}", "WARN")
+            self.send_response(e.code)
+            self.send_header("Content-Type", resp_ct)
+            self.send_header("Content-Length", str(len(resp_body)))
+            self.end_headers()
+            self.wfile.write(resp_body)
         except Exception as e:
             _log(f"Callback proxy error for {method} {path}: {e}", "ERROR")
             self._send_json(502, {"error": f"Callback server error: {e}"})
