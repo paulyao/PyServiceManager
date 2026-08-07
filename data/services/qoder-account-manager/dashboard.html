@@ -147,7 +147,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>部门</th><th>角色</th><th>更新时间</th><th>差异</th><th>操作</th>
+          <th class="sortable" onclick="sortAccounts('email')">邮箱</th><th>姓名</th><th>部门</th><th class="sortable" onclick="sortAccounts('role')">角色</th><th class="sortable" onclick="sortAccounts('updated_at')">更新时间</th><th class="sortable" onclick="sortAccounts('diff')">差异</th><th>操作</th>
         </tr></thead>
         <tbody id="acc-tbody"></tbody>
       </table>
@@ -165,7 +165,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>邮箱</th><th>姓名</th><th>部门</th><th>角色</th><th>更新时间</th><th>差异</th><th>操作</th>
+          <th class="sortable" onclick="sortAccounts('email')">邮箱</th><th>姓名</th><th>部门</th><th class="sortable" onclick="sortAccounts('role')">角色</th><th class="sortable" onclick="sortAccounts('updated_at')">更新时间</th><th class="sortable" onclick="sortAccounts('diff')">差异</th><th>操作</th>
         </tr></thead>
         <tbody id="cn-tbody"></tbody>
       </table>
@@ -306,6 +306,13 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
   const summary = data.summary || {};
   const q = document.getElementById(searchId) ? document.getElementById(searchId).value.toLowerCase() : '';
   const filtered = members.filter(m => !q || m.email.toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q));
+  // 应用排序
+  filtered.sort((a, b) => {
+    const av = a[accSortField]; const bv = b[accSortField];
+    if (typeof av === 'number' && typeof bv === 'number')
+      return accSortAsc ? av - bv : bv - av;
+    return accSortAsc ? String(av||'').localeCompare(String(bv||'')) : String(bv||'').localeCompare(String(av||''));
+  });
 
   document.getElementById(updatedId).textContent = summary.last_updated ? '上次更新: ' + summary.last_updated : '尚未采集';
 
@@ -372,11 +379,28 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
       '<td><button class="btn-edit" onclick="startEditAccount(\'' + org + '\',\'' + esc(m.email) + '\')">编辑</button>' + delBtn + '</td></tr>';
   });
   document.getElementById(tbodyId).innerHTML = addRowHtml + rows.join('');
+  // 高亮当前排序列
+  const tableWrap = document.getElementById(tbodyId).closest('.table-wrap');
+  if (tableWrap) {
+    tableWrap.querySelectorAll('th.sortable').forEach(th => {
+      th.classList.remove('sort-asc', 'sort-desc');
+      const m = th.getAttribute('onclick').match(/'([^']+)'/);
+      if (m && m[1] === accSortField) th.classList.add(accSortAsc ? 'sort-asc' : 'sort-desc');
+    });
+  }
 }
 
 // ── 账号编辑 ──
 let editingAccount = null;
 let addingOrg = null;
+let accSortField = 'email';
+let accSortAsc = true;
+
+function sortAccounts(field) {
+  if (field === accSortField) { accSortAsc = !accSortAsc; } else { accSortField = field; accSortAsc = true; }
+  renderAccounts('qoder', 'acc-tbody', 'acc-updated', 'acc-search');
+  renderAccounts('qoder_cn', 'cn-tbody', 'cn-updated', 'cn-search');
+}
 
 function startAddAccount(org) {
   addingOrg = org;
