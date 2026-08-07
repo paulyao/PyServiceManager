@@ -825,11 +825,24 @@ def run(config, modules):
         web_mod.register_handler("/api/export-accounts", "POST", handle_export_accounts)
 
         def handle_usage(request_info):
-            """返回两个组织的完整用量数据（从 SQLite 读取）。"""
+            """返回两个组织的完整用量数据（从 SQLite 读取），并交叉引用本地账号表补充线下姓名。"""
             with _data_lock:
                 snapshot = dict(_shared_data)
             qoder_members = snapshot.get("members", [])
             cn_members = snapshot.get("members_cn", [])
+            # 构建本地姓名映射，为每个成员补充 localName
+            def _build_local_names(table_name):
+                try:
+                    result = sqlite_mod.query(db_path=_DB_FILE,
+                        sql=f"SELECT email, name FROM {table_name}")
+                    return {r.get("email", ""): r.get("name", "")
+                            for r in result.get("data", {}).get("rows", []) if r.get("name")}
+                except Exception:
+                    return {}
+            qoder_local = _build_local_names("qoder_accounts")
+            cn_local = _build_local_names("qoder_cn_accounts")
+            qoder_members = [dict(m, localName=qoder_local.get(m.get("email", ""), "")) for m in qoder_members]
+            cn_members = [dict(m, localName=cn_local.get(m.get("email", ""), "")) for m in cn_members]
             return {"status_code": 200, "content_type": "application/json; charset=utf-8",
                     "body": json.dumps({
                         "qoder": {"members": qoder_members},

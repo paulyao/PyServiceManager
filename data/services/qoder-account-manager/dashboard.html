@@ -600,7 +600,7 @@ function renderUsageOrg(org, tbodyId) {
     const bc = barClass(pct);
     return '<tr>' +
       '<td class="email-cell">' + esc(m.email) + '</td>' +
-      '<td class="name-cell">' + esc(m.name||'-') + '</td>' +
+      '<td class="name-cell">' + esc((m.localName && m.localName !== m.name) ? (m.name + '(' + m.localName + ')') : (m.name||'-')) + '</td>' +
       '<td>' + fmt(m.planUsed||0) + '</td>' +
       '<td>' + fmt(m.planLimit||0) + '</td>' +
       '<td>' + fmt(m.sharedUsed||0) + '</td>' +
