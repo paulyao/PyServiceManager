@@ -202,17 +202,22 @@ def run(config, modules):
     def _init_preset_accounts():
         """预置 99 个 email 槽位到两张账号表。"""
         qoder_rows = [(f"ai{i:02d}@wsgjp.com", "", "", None) for i in range(1, 88)]
-        cn_rows = [(f"ai_cn{i:02d}@wsgjp.com", "", "", None) for i in range(1, 88)]
+        cn_rows = [(f"ai_cn{i:02d}@wsgjp.com", "", "", None) for i in range(1, 6)]
         sqlite_mod.batch_insert(db_path=_DB_FILE,
             sql="INSERT OR IGNORE INTO qoder_accounts (email, name, department, updated_at) VALUES (?,?,?,?)", rows=qoder_rows)
         sqlite_mod.batch_insert(db_path=_DB_FILE,
             sql="INSERT OR IGNORE INTO qoder_cn_accounts (email, name, department, updated_at) VALUES (?,?,?,?)", rows=cn_rows)
-        # 删除超出 87 的预置槽位（仅删空姓名行，保留已分配的）
-        for _tbl, _prefix in (("qoder_accounts", "ai"), ("qoder_cn_accounts", "ai_cn")):
-            for _i in range(88, 100):
-                sqlite_mod.execute(db_path=_DB_FILE,
-                    sql=f"DELETE FROM {_tbl} WHERE email = ? AND (name = '' OR name IS NULL)",
-                    params=(f"{_prefix}{_i:02d}@wsgjp.com",), commit=True)
+        # 删除超出的空槽位（仅删空姓名行，保留已分配的）
+        # Qoder 国际版：清理 ai88-ai99
+        for _i in range(88, 100):
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql="DELETE FROM qoder_accounts WHERE email = ? AND (name = '' OR name IS NULL)",
+                params=(f"ai{_i:02d}@wsgjp.com",), commit=True)
+        # Qoder CN：清理 ai_cn17-ai_cn99（预置缩减为 01-05）
+        for _i in range(17, 100):
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql="DELETE FROM qoder_cn_accounts WHERE email = ? AND (name = '' OR name IS NULL)",
+                params=(f"ai_cn{_i:02d}@wsgjp.com",), commit=True)
         _log(f"预置账号: qoder {len(qoder_rows)} 条, qoder_cn {len(cn_rows)} 条")
 
     def _auto_generate_email(table, org):
