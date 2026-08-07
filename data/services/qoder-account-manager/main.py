@@ -632,7 +632,7 @@ def run(config, modules):
                 diff = None
                 if name and email in api_map:
                     if api_map[email] and api_map[email] != name:
-                        diff = "名称不一致"
+                        diff = f"名称不一致({api_map[email]})"
                 elif name and email not in api_map:
                     diff = "API无此账号"
                 members.append({"email": email, "name": name,

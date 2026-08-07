@@ -341,7 +341,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
   }
   const rows = filtered.map(m => {
     let diffBadge = '';
-    if (m.diff === '名称不一致') diffBadge = '<span class="badge diff">名称不一致</span>';
+    if (m.diff && m.diff.indexOf('名称不一致') === 0) diffBadge = '<span class="badge diff">' + esc(m.diff) + '</span>';
     else if (m.diff === 'API无此账号') diffBadge = '<span class="badge missing">API无此账号</span>';
     else if (m.diff === '本地无此账号') diffBadge = '<span class="badge local-missing">本地无此账号</span>';
     const role = m.role || '开发';
