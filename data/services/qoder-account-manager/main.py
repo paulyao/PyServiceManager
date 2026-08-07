@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -200,13 +201,30 @@ def run(config, modules):
 
     def _init_preset_accounts():
         """预置 99 个 email 槽位到两张账号表。"""
-        qoder_rows = [(f"ai{i:02d}@wsgjp.com", "", "", None) for i in range(1, 100)]
-        cn_rows = [(f"ai_cn{i:02d}@wsgjp.com", "", "", None) for i in range(1, 100)]
+        qoder_rows = [(f"ai{i:02d}@wsgjp.com", "", "", None) for i in range(1, 88)]
+        cn_rows = [(f"ai_cn{i:02d}@wsgjp.com", "", "", None) for i in range(1, 88)]
         sqlite_mod.batch_insert(db_path=_DB_FILE,
             sql="INSERT OR IGNORE INTO qoder_accounts (email, name, department, updated_at) VALUES (?,?,?,?)", rows=qoder_rows)
         sqlite_mod.batch_insert(db_path=_DB_FILE,
             sql="INSERT OR IGNORE INTO qoder_cn_accounts (email, name, department, updated_at) VALUES (?,?,?,?)", rows=cn_rows)
+        # 删除超出 87 的预置槽位（仅删空姓名行，保留已分配的）
+        for _tbl, _prefix in (("qoder_accounts", "ai"), ("qoder_cn_accounts", "ai_cn")):
+            for _i in range(88, 100):
+                sqlite_mod.execute(db_path=_DB_FILE,
+                    sql=f"DELETE FROM {_tbl} WHERE email = ? AND (name = '' OR name IS NULL)",
+                    params=(f"{_prefix}{_i:02d}@wsgjp.com",), commit=True)
         _log(f"预置账号: qoder {len(qoder_rows)} 条, qoder_cn {len(cn_rows)} 条")
+
+    def _auto_generate_email(table, org):
+        """查找表中邮箱数字最大值，+1 生成新邮箱。"""
+        result = sqlite_mod.query(db_path=_DB_FILE, sql=f"SELECT email FROM {table}")
+        max_num = 0
+        for r in result.get("data", {}).get("rows", []):
+            m = re.search(r"(\d+)", r.get("email", ""))
+            if m:
+                max_num = max(max_num, int(m.group(1)))
+        prefix = "ai_cn" if org == "qoder_cn" else "ai"
+        return f"{prefix}{max_num + 1:02d}@wsgjp.com"
 
     def _import_excel(excel_path, table_name):
         """首次导入 Excel 数据到账号表。"""
@@ -720,12 +738,19 @@ def run(config, modules):
                             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), email), commit=True)
                 _log(f"账号认领: {table} {email} name={name} department={department} role={role}")
                 return _resp({"success": True})
+            # 邮箱不存在：检查是否有空闲槽位
+            empty_check = sqlite_mod.query_one(db_path=_DB_FILE,
+                sql=f"SELECT email FROM {table} WHERE (name = '' OR name IS NULL) LIMIT 1")
+            if empty_check.get("data", {}).get("row"):
+                return _resp({"success": False, "error": "仍有空闲槽位，请使用空闲槽位的邮箱"})
+            # 无空闲槽位：自动生成 max+1 邮箱
+            new_email = _auto_generate_email(table, org)
             sqlite_mod.execute(db_path=_DB_FILE,
                 sql=f"INSERT INTO {table} (email, name, department, role, updated_at) VALUES (?, ?, ?, ?, ?)",
-                params=(email, name, department, role,
+                params=(new_email, name, department, role,
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S")), commit=True)
-            _log(f"账号新增: {table} {email} name={name} department={department} role={role}")
-            return _resp({"success": True})
+            _log(f"账号新增(自动扩容): {table} {new_email} name={name} department={department} role={role}")
+            return _resp({"success": True, "email": new_email})
 
         web_mod.register_handler("/api/account-add", "POST", handle_account_add)
 
@@ -945,7 +970,16 @@ def run(config, modules):
                 _log(f"账号分配: appId={app_id}, name={submitter_name} → {email} (新分配)")
                 return _alloc_response(True, 1, None, email)
 
-            return _alloc_response(False, 0, "无可用账号", None)
+            # 3. 无空闲槽位时自动扩容：max+1 生成新邮箱
+            new_email = _auto_generate_email(table, "qoder_cn" if app_id == app_id_cn else "qoder")
+            dept_str = ";".join(dept_list)
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql=f"INSERT INTO {table} (email, name, department, role, updated_at) VALUES (?, ?, ?, ?, ?)",
+                params=(new_email, submitter_name, dept_str,
+                        "营销" if app_id == app_id_cn else "开发",
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")), commit=True)
+            _log(f"账号分配(自动扩容): appId={app_id}, name={submitter_name} -> {new_email}")
+            return _alloc_response(True, 1, None, new_email)
 
         def _alloc_response(success, code, message, email):
             data = [{"fieldName": "email", "fieldValue": email}] if email else []

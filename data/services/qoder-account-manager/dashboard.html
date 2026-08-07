@@ -437,6 +437,7 @@ async function saveNewAccount(org) {
     });
     const d = await r.json();
     if (!d.success) { alert('新增失败: ' + (d.error || '未知错误')); return; }
+    if (d.email) alert('已自动分配邮箱: ' + d.email);
     addingOrg = null;
     fetchAccounts();
   } catch(e) { alert('新增失败: ' + e); }
