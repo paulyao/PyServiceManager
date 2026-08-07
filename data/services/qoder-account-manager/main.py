@@ -630,10 +630,12 @@ def run(config, modules):
                 if name:
                     local_named_emails.add(email)
                 diff = None
-                if name and email in api_map:
+                if not name:
+                    diff = "未分配"
+                elif email in api_map:
                     if api_map[email] and api_map[email] != name:
                         diff = f"名称不一致({api_map[email]})"
-                elif name and email not in api_map:
+                elif email not in api_map:
                     diff = "API无此账号"
                 members.append({"email": email, "name": name,
                                 "department": r.get("department", ""),

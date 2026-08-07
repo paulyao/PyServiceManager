@@ -54,6 +54,7 @@ tr:hover { background: #f8fafc; }
 .badge.diff { background: #fef3c7; color: #92400e; }
 .badge.missing { background: #fee2e2; color: #991b1b; }
 .badge.local-missing { background: #dbeafe; color: #1e40af; }
+.badge.unassigned { background: #f1f5f9; color: #64748b; }
 .badge.role-dev { background: #dbeafe; color: #1e40af; }
 .badge.role-test { background: #d1fae5; color: #065f46; }
 .badge.role-ops { background: #ffedd5; color: #9a3412; }
@@ -304,7 +305,7 @@ async function fetchAccounts() {
 
 function renderAccounts(org, tbodyId, updatedId, searchId) {
   const data = accountData[org] || {};
-  const members = (data.members || []).filter(m => m.name);
+  const members = data.members || [];
   const summary = data.summary || {};
   const q = document.getElementById(searchId) ? document.getElementById(searchId).value.toLowerCase() : '';
   const filtered = members.filter(m => !q || m.email.toLowerCase().includes(q) || (m.name||'').toLowerCase().includes(q));
@@ -344,6 +345,7 @@ function renderAccounts(org, tbodyId, updatedId, searchId) {
     if (m.diff && m.diff.indexOf('名称不一致') === 0) diffBadge = '<span class="badge diff">' + esc(m.diff) + '</span>';
     else if (m.diff === 'API无此账号') diffBadge = '<span class="badge missing">API无此账号</span>';
     else if (m.diff === '本地无此账号') diffBadge = '<span class="badge local-missing">本地无此账号</span>';
+    else if (m.diff === '未分配') diffBadge = '<span class="badge unassigned">未分配</span>';
     const role = m.role || '开发';
     const roleClassMap = {'开发': 'role-dev', '测试': 'role-test', '运维': 'role-ops', '产品': 'role-pm', '营销': 'role-mkt'};
     const roleBadge = roleClassMap[role]
