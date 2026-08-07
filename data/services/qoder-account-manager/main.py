@@ -447,6 +447,28 @@ def run(config, modules):
                 "status": quota.get("status", "unknown"),
                 "nextResetAt": quota.get("nextResetAt", ""),
             })
+            # 自动清理：距下次重置不足 24h 且总计已用=0 的成员，调用 API 删除
+            next_reset = quota.get("nextResetAt", "")
+            total_used_val = total_q.get("usedValue", 0)
+            if next_reset and total_used_val == 0:
+                try:
+                    from datetime import timezone
+                    reset_dt = datetime.fromisoformat(next_reset.replace("Z", "+00:00"))
+                    now_utc = datetime.now(timezone.utc)
+                    hours_left = (reset_dt - now_utc).total_seconds() / 3600
+                    if 0 <= hours_left < 24:
+                        del_headers = {"Authorization": f"Bearer {key}"}
+                        del_result = http_mod.delete(
+                            f"{base_url}/v1/organizations/{o_id}/members/{member_id}",
+                            headers=del_headers)
+                        if del_result.get("success"):
+                            _log(f"自动删除成员: {member.get('email', '')} "
+                                 f"(距重置 {hours_left:.1f}h, 总计已用=0)")
+                        else:
+                            _log(f"自动删除失败: {member.get('email', '')} - "
+                                 f"{del_result.get('error', 'unknown')}", "WARN")
+                except Exception as e:
+                    _log(f"自动删除检查异常: {member.get('email', '')} - {e}", "WARN")
             if is_quota_exhausted(quota):
                 send_alarm(member, quota)
             time.sleep(rate_limit_delay)
