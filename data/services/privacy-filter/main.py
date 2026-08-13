@@ -84,6 +84,47 @@ def _get_opf():
     return _state["opf"]
 
 
+def _collapse_to_redacted(result_dict):
+    """将 typed 模式的结果后处理为 redacted 模式（避免重新加载模型）。
+
+    把所有 span 标签统一为 "redacted"，占位符统一为 "<REDACTED>"，
+    并重建 redacted_text。
+    """
+    spans = result_dict.get("detected_spans", [])
+    text = result_dict.get("text", "")
+    new_spans = []
+    pieces = []
+    cursor = 0
+    for span in spans:
+        pieces.append(text[cursor:span["start"]])
+        pieces.append("<REDACTED>")
+        cursor = span["end"]
+        new_spans.append({
+            "label": "redacted",
+            "start": span["start"],
+            "end": span["end"],
+            "text": span["text"],
+            "placeholder": "<REDACTED>",
+        })
+    pieces.append(text[cursor:])
+    result_dict["detected_spans"] = new_spans
+    result_dict["redacted_text"] = "".join(pieces)
+    result_dict["summary"]["output_mode"] = "redacted"
+    result_dict["summary"]["by_label"] = {"redacted": len(new_spans)}
+    return result_dict
+
+
+def _preload_model(log_fn):
+    """预加载模型权重到内存（启动时调用，避免首次请求超时）。
+
+    OPF 构造函数仅保存配置，实际权重在 get_runtime() 时加载。
+    通过显式调用 get_runtime() 强制加载 ~2.8GB safetensors。
+    """
+    opf = _get_opf()
+    opf.get_runtime()
+    log_fn("模型权重已加载到内存")
+
+
 def run(config, modules):
     """服务主入口
 
@@ -130,22 +171,21 @@ def run(config, modules):
                     "success": False, "data": None, "error": "text 参数必须是非空字符串"
                 })
 
-            # 懒加载模型（首次请求触发）
-            if _state["opf"] is None:
-                _log(f"[MODEL_LOADING] ID={request_id} 开始加载 OPF 模型...")
-                _get_opf()
-                _log(f"[MODEL_LOADED] ID={request_id} 模型加载完成")
-
             opf = _state["opf"]
-
-            # 支持请求级 output_mode 覆盖
-            req_output_mode = data.get("output_mode")
-            if req_output_mode and req_output_mode != _state["config"].get("model", {}).get("output_mode", "typed"):
-                opf.set_output_mode(req_output_mode)
+            if opf is None:
+                return _json_response(503, {
+                    "success": False, "data": None,
+                    "error": "模型未加载，请稍后重试或检查服务日志",
+                })
 
             _log(f"[REDACT_START] ID={request_id} text_len={len(text)}")
             result = opf.redact(text)
             result_dict = result.to_dict()
+
+            # 请求级 output_mode=redacted 时，后处理折叠标签
+            # （避免调用 set_output_mode 导致模型重新加载）
+            if data.get("output_mode") == "redacted":
+                result_dict = _collapse_to_redacted(result_dict)
 
             span_count = result_dict.get("summary", {}).get("span_count", 0)
             _log(f"[REDACT_SUCCESS] ID={request_id} spans={span_count}")
@@ -187,7 +227,14 @@ def run(config, modules):
         _log("web-service 模块未启用，HTTP 接口不可用", "ERROR")
         return
 
-    _log("首次 /redact 请求将触发模型加载（约 10-30 秒），请耐心等待")
+    # ── 预加载模型（启动时加载，避免首次请求超时） ──
+    try:
+        _log("开始加载 OPF 模型（约 10-30 秒）...")
+        _preload_model(_log)
+        _log("OPF 模型加载完成，服务就绪")
+    except Exception as e:
+        _log(f"OPF 模型加载失败: {e}", "ERROR")
+        _log("服务继续运行，/redact 将返回 503", "WARNING")
 
     # ── 主循环保活 ──
     while True:
