@@ -17,7 +17,17 @@ Usage in service code:
         return {"status_code": 200, "content_type": "text/plain", "body": "OK"}
     web_mod.register_handler("/custom", "POST", my_handler)
 
+    # 注册需要鉴权和自定义限流的 API
+    web_mod.register_api("/api/admin", callback,
+                         auth={"header_name": "X-API-Key", "header_value": "secret"},
+                         rate_limit=5)
+
 路由自动添加服务名前缀：注册 "/" 实际路由为 "/{service_name}/"。
+
+可选参数（所有注册方法均支持）：
+    auth: dict | None — 请求头鉴权配置，None 表示不鉴权（默认）。
+          格式：{"header_name": "X-API-Key", "header_value": "secret123"}
+    rate_limit: int — 每秒最大请求数，默认 10，设为 0 表示不限流。
 """
 
 import json
@@ -179,7 +189,7 @@ class Module:
 
     # ── 公开方法 ──
 
-    def register_handler(self, path, method, callback):
+    def register_handler(self, path, method, callback, *, auth=None, rate_limit=10):
         """注册一个路由处理器。
 
         GET 请求：callback 在后台线程中定期调用，结果写入数据文件，守护进程从文件读取。
@@ -192,6 +202,9 @@ class Module:
             callback: 处理函数，签名 callback(request_info) -> response_dict
                 request_info: {"method", "path", "headers", "body", "query"}
                 response_dict: {"status_code": int, "content_type": str, "body": str}
+            auth: 请求头鉴权配置，None 表示不鉴权。
+                  格式：{"header_name": "X-API-Key", "header_value": "secret123"}
+            rate_limit: 每秒最大请求数，默认 10，0 表示不限流。
 
         Returns:
             dict: {"success": bool, "data": dict, "error": str|None}
@@ -219,6 +232,8 @@ class Module:
                 "type": "api",
                 "data_file": str(data_file),
                 "service": self._service_name,
+                "auth": auth,
+                "rate_limit": rate_limit,
             }
         else:
             # POST/PUT/DELETE/PATCH 路由：回调服务器模式（实时执行）
@@ -228,6 +243,8 @@ class Module:
                 "type": "callback",
                 "callback_url": callback_url,
                 "service": self._service_name,
+                "auth": auth,
+                "rate_limit": rate_limit,
             }
 
         self._register_with_daemon(full_path, method_upper, route_info)
@@ -241,12 +258,15 @@ class Module:
             "error": None,
         }
 
-    def register_page(self, path, html):
+    def register_page(self, path, html, *, auth=None, rate_limit=10):
         """注册一个静态 HTML 页面（GET 路由）。
 
         Args:
             path: URL 路径（相对）
             html: HTML 字符串内容
+            auth: 请求头鉴权配置，None 表示不鉴权。
+                  格式：{"header_name": "X-API-Key", "header_value": "secret123"}
+            rate_limit: 每秒最大请求数，默认 10，0 表示不限流。
 
         Returns:
             dict: {"success": bool, "data": dict, "error": str|None}
@@ -256,6 +276,8 @@ class Module:
             "type": "page",
             "html": html,
             "service": self._service_name,
+            "auth": auth,
+            "rate_limit": rate_limit,
         }
         self._register_with_daemon(full_path, "GET", route_info)
 
@@ -268,7 +290,7 @@ class Module:
             "error": None,
         }
 
-    def register_api(self, path, callback):
+    def register_api(self, path, callback, *, auth=None, rate_limit=10):
         """注册一个 JSON API 端点（GET 路由）。
 
         callback 为无参函数，返回 dict。模块会在后台线程中定期调用 callback
@@ -277,6 +299,9 @@ class Module:
         Args:
             path: URL 路径（相对）
             callback: 无参函数，返回 dict（将自动 JSON 序列化）
+            auth: 请求头鉴权配置，None 表示不鉴权。
+                  格式：{"header_name": "X-API-Key", "header_value": "secret123"}
+            rate_limit: 每秒最大请求数，默认 10，0 表示不限流。
 
         Returns:
             dict: {"success": bool, "data": dict, "error": str|None}
@@ -306,6 +331,8 @@ class Module:
             "type": "api",
             "data_file": str(data_file),
             "service": self._service_name,
+            "auth": auth,
+            "rate_limit": rate_limit,
         }
         self._register_with_daemon(full_path, "GET", route_info)
 

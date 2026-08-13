@@ -17,6 +17,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -24,6 +25,54 @@ from pathlib import Path
 _ROUTES_LOCK = threading.Lock()
 _ROUTES = {}  # {path: {method: route_info}}
 _LOGGER = None
+
+# 限流：每条路由维护最近 1 秒内的请求时间戳列表
+_RATE_LIMITS = {}  # {path: [timestamp, ...]}
+_RATE_LOCK = threading.Lock()
+
+
+def _check_auth(headers, auth_config):
+    """检查请求头鉴权。
+
+    Args:
+        headers: 请求头 dict
+        auth_config: 鉴权配置 {"header_name": "X-API-Key", "header_value": "secret"}
+
+    Returns:
+        bool: True 表示通过（或无需鉴权）
+    """
+    if not auth_config:
+        return True
+    header_name = auth_config.get("header_name", "X-API-Key")
+    header_value = auth_config.get("header_value", "")
+    actual = headers.get(header_name, "")
+    return actual == header_value
+
+
+def _check_rate_limit(path, limit):
+    """滑动窗口限流检查。
+
+    Args:
+        path: 完整路由路径（作为限流 key）
+        limit: 每秒最大请求数，<=0 表示不限流
+
+    Returns:
+        bool: True 表示允许通过
+    """
+    if limit <= 0:
+        return True
+    now = time.time()
+    cutoff = now - 1.0
+    with _RATE_LOCK:
+        timestamps = _RATE_LIMITS.get(path, [])
+        # 移除 1 秒前的时间戳
+        while timestamps and timestamps[0] < cutoff:
+            timestamps.pop(0)
+        if len(timestamps) >= limit:
+            return False
+        timestamps.append(now)
+        _RATE_LIMITS[path] = timestamps
+        return True
 
 
 def _log(msg, level="INFO"):
@@ -76,6 +125,8 @@ class DaemonHandler(BaseHTTPRequestHandler):
                 route_info = None
 
         if route_info:
+            if not self._check_access(path, route_info):
+                return
             self._serve_route(route_info)
         elif path == "/":
             self._serve_auto_index()
@@ -100,6 +151,8 @@ class DaemonHandler(BaseHTTPRequestHandler):
                 route_info = None
 
         if route_info and route_info.get("callback_url"):
+            if not self._check_access(path, route_info):
+                return
             self._proxy_to_callback(route_info["callback_url"], "POST", path)
         else:
             self._send_json(404, {"error": "Not Found", "path": path})
@@ -135,9 +188,35 @@ class DaemonHandler(BaseHTTPRequestHandler):
             else:
                 route_info = None
         if route_info and route_info.get("callback_url"):
+            if not self._check_access(path, route_info):
+                return
             self._proxy_to_callback(route_info["callback_url"], method, path)
         else:
             self._send_json(404, {"error": "Not Found", "path": path})
+
+    def _check_access(self, path, route_info):
+        """统一鉴权与限流前置检查。
+
+        Returns:
+            bool: True 表示通过，False 表示已拒绝（响应已发送）
+        """
+        # 鉴权检查
+        auth = route_info.get("auth")
+        if auth and not _check_auth(dict(self.headers), auth):
+            self._send_json(401, {
+                "error": "Unauthorized",
+                "message": "Invalid or missing auth header",
+            })
+            return False
+        # 限流检查
+        rate_limit = route_info.get("rate_limit", 10)
+        if not _check_rate_limit(path, rate_limit):
+            self._send_json(429, {
+                "error": "Too Many Requests",
+                "message": f"Rate limit exceeded: {rate_limit}/s",
+            })
+            return False
+        return True
 
     def _handle_registration(self, path):
         """处理路由注册/注销（仅限 localhost）。"""
