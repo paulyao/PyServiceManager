@@ -191,7 +191,11 @@ def run(config, modules):
             _log(f"[REDACT_SUCCESS] ID={request_id} spans={span_count}")
             return _json_response(200, {
                 "success": True,
-                "data": result_dict,
+                "data": {
+                    "by_label": result_dict.get("summary", {}).get("by_label", {}),
+                    "text": result_dict.get("text", ""),
+                    "redacted_text": result_dict.get("redacted_text", ""),
+                },
                 "error": None,
             })
 
