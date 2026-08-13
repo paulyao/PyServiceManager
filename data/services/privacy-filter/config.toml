@@ -1,0 +1,7 @@
+# Privacy Filter 脱敏服务配置
+
+[model]
+source_path = "/Users/paulyao/work/2026/privacy-filter"  # opf 包源码路径
+device = "cpu"               # 推理设备：cpu 或 cuda（macOS 仅支持 cpu）
+output_mode = "typed"        # typed（保留标签类型）或 redacted（统一脱敏标记）
+# checkpoint = ""            # 可选：自定义模型路径，留空使用默认 ~/.opf/privacy_filter
