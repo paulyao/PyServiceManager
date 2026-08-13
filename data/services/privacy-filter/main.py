@@ -162,13 +162,17 @@ def run(config, modules):
         try:
             data, err_resp = _parse_body(request_info)
             if err_resp:
+                err_body = json.loads(err_resp["body"])
+                err_body["request_id"] = request_id
+                err_resp["body"] = json.dumps(err_body, ensure_ascii=False)
                 return err_resp
 
             text = data.get("text")
             if not isinstance(text, str) or not text.strip():
                 _log(f"[REQUEST_VALIDATION] ID={request_id} Error: text 参数必须是非空字符串", "WARNING")
                 return _json_response(400, {
-                    "success": False, "data": None, "error": "text 参数必须是非空字符串"
+                    "success": False, "data": None, "error": "text 参数必须是非空字符串",
+                    "request_id": request_id,
                 })
 
             opf = _state["opf"]
@@ -176,6 +180,7 @@ def run(config, modules):
                 return _json_response(503, {
                     "success": False, "data": None,
                     "error": "模型未加载，请稍后重试或检查服务日志",
+                    "request_id": request_id,
                 })
 
             _log(f"[REDACT_START] ID={request_id} text_len={len(text)}")
@@ -197,6 +202,7 @@ def run(config, modules):
                     "redacted_text": result_dict.get("redacted_text", ""),
                 },
                 "error": None,
+                "request_id": request_id,
             })
 
         except RuntimeError as e:
@@ -204,16 +210,19 @@ def run(config, modules):
             return _json_response(503, {
                 "success": False, "data": None,
                 "error": f"模型加载失败: {e}",
+                "request_id": request_id,
             })
         except ValueError as ve:
             _log(f"[CONFIG_ERROR] ID={request_id} Error={ve}", "ERROR")
             return _json_response(503, {
                 "success": False, "data": None, "error": str(ve),
+                "request_id": request_id,
             })
         except Exception as e:
             _log(f"[UNEXPECTED_ERROR] ID={request_id} ErrorType={type(e).__name__} ErrorMsg={e}", "ERROR")
             return _json_response(500, {
                 "success": False, "data": None, "error": f"服务内部错误: {e}",
+                "request_id": request_id,
             })
         finally:
             _log(f"[REQUEST_END] ID={request_id}")
