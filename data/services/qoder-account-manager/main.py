@@ -470,10 +470,10 @@ def run(config, modules):
                 "status": quota.get("status", "unknown"),
                 "nextResetAt": quota.get("nextResetAt", ""),
             })
-            # 自动清理：距下次重置不足 24h 且总计已用=0 的成员，调用 API 删除
+            # 自动清理：距下次重置不足 24h 且总计已用 < 50 的成员，调用 API 删除
             next_reset = quota.get("nextResetAt", "")
             total_used_val = total_q.get("usedValue", 0)
-            if next_reset and total_used_val == 0:
+            if next_reset and total_used_val < 50:
                 try:
                     from datetime import timezone
                     reset_dt = datetime.fromisoformat(next_reset.replace("Z", "+00:00"))
