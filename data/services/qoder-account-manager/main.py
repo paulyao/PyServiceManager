@@ -106,6 +106,7 @@ def run(config, modules):
     monitor_cfg = config.get("monitor", {})
     rate_limit_delay = monitor_cfg.get("rate_limit_delay", 0.5)
     alarm_dedup_days = monitor_cfg.get("alarm_dedup_days", 1)
+    auto_cleanup_threshold = monitor_cfg.get("auto_cleanup_threshold", 50)
 
     heartbeat_cfg = config.get("heartbeat", {})
     heartbeat_interval_sec = heartbeat_cfg.get("interval_minutes", 10) * 60
@@ -473,7 +474,7 @@ def run(config, modules):
             # 自动清理：距下次重置不足 24h 且总计已用 < 50 的成员，调用 API 删除
             next_reset = quota.get("nextResetAt", "")
             total_used_val = total_q.get("usedValue", 0)
-            if next_reset and total_used_val < 50:
+            if next_reset and total_used_val <= auto_cleanup_threshold:
                 try:
                     from datetime import timezone
                     reset_dt = datetime.fromisoformat(next_reset.replace("Z", "+00:00"))
