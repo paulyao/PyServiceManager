@@ -7,6 +7,7 @@ Usage: python deploy.py [--start]
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -59,6 +60,14 @@ def _get_platform_python():
 def main():
     code = (SERVICE_DIR / "main.py").read_text(encoding="utf-8")
     config = (SERVICE_DIR / "config.toml").read_text(encoding="utf-8")
+
+    # 0. gitleaks 可用性检查（可选引擎，缺失仅提示，不阻塞部署）
+    gl_path = shutil.which("gitleaks")
+    if gl_path:
+        print(f"[OK] gitleaks 已安装: {gl_path}")
+    else:
+        print("[WARN] gitleaks 未安装，密钥扫描引擎不可用（不影响 privacy-filter 脱敏）。"
+              "如需启用请执行: brew install gitleaks")
 
     # 1. 创建服务（已存在则更新代码）
     status, body = api("POST", "/services", {

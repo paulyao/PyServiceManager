@@ -5,25 +5,29 @@
 
 API（通过 web-service 模块提供，URL 自动添加服务名前缀）：
 - GET  /        → 脱敏测试页面（静态 HTML，平台 Web 按钮默认打开）
-- GET  /health  → 健康检查（模型加载状态、设备、checkpoint 路径）
-- POST /redact  → 文本脱敏（text 必填，output_mode 可选 typed|redacted）
+- GET  /health  → 健康检查（模型加载状态、设备、checkpoint 路径、gitleaks 可用性）
+- POST /redact  → 文本脱敏（text 必填，output_mode 可选 typed|redacted，
+                  engines 可选子集 {privacy-filter, gitleaks}，默认 [privacy-filter]）
 
 依赖模块：log-enhancer, web-service
 依赖包：torch, safetensors, tiktoken, huggingface_hub, numpy, packaging
+外部二进制（可选）：gitleaks（密钥扫描引擎，brew install gitleaks）
 """
 import json
 import logging
 import platform
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# 共享状态：config 引用 + 懒加载 OPF 实例 + 线程锁 + 启动环境检查结果
-_state = {"config": {}, "opf": None, "lock": threading.Lock(), "env": {}}
+# 共享状态：config 引用 + 懒加载 OPF 实例 + 线程锁 + 启动环境检查结果 + gitleaks 版本缓存
+_state = {"config": {}, "opf": None, "lock": threading.Lock(), "env": {}, "gitleaks_version": None}
 
 
 # 脱敏测试页面（GET /privacy-filter/，平台 Web 按钮默认打开）
@@ -49,8 +53,9 @@ _TEST_PAGE_HTML = """<!DOCTYPE html>
         font-size: 14px; font-family: inherit; resize: vertical;
     }
     textarea:focus { outline: none; border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,.15); }
-    .toolbar { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
+    .toolbar { display: flex; align-items: center; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
     .toolbar label { font-size: 13px; color: #57606a; display: flex; align-items: center; gap: 4px; }
+    .engine-hint { width: 100%; font-size: 12px; color: #8b949e; }
     button {
         margin-left: auto; padding: 8px 20px;
         background: #0969da; color: #fff; border: none; border-radius: 6px;
@@ -87,8 +92,11 @@ _TEST_PAGE_HTML = """<!DOCTYPE html>
     <p class="sub">输入文本，检测并脱敏其中的隐私信息（人名、邮箱、电话、地址、日期、密钥等）</p>
     <textarea id="input" placeholder="输入待脱敏文本，例如：Alice was born on 1990-01-02. Contact: alice@example.com, 13800138000."></textarea>
     <div class="toolbar">
+        <label><input type="checkbox" id="engine-pf" checked> privacy-filter</label>
+        <label><input type="checkbox" id="engine-gitleaks"> gitleaks</label>
         <label><input type="checkbox" id="redacted-mode"> redacted 模式（统一占位符）</label>
         <button id="btn" onclick="doRedact()">脱敏处理</button>
+        <span class="engine-hint">推荐：普通文本/文件用 privacy-filter，代码/密钥凭据用 gitleaks，两者可叠加（至少选一个）</span>
     </div>
     <div class="error-msg" id="error"></div>
     <div class="result" id="result">
@@ -111,7 +119,15 @@ async function doRedact() {
         errorBox.style.display = 'block';
         return;
     }
-    const payload = { text: text };
+    const engines = [];
+    if ($('engine-pf').checked) engines.push('privacy-filter');
+    if ($('engine-gitleaks').checked) engines.push('gitleaks');
+    if (engines.length === 0) {
+        errorBox.textContent = '请至少选择一个脱敏引擎';
+        errorBox.style.display = 'block';
+        return;
+    }
+    const payload = { text: text, engines: engines };
     if ($('redacted-mode').checked) payload.output_mode = 'redacted';
 
     const btn = $('btn');
@@ -338,6 +354,101 @@ def _check_environment(log_fn):
     return env
 
 
+def _gitleaks_info():
+    """获取 gitleaks 引擎信息（可用性与版本，版本结果缓存）。
+
+    Returns:
+        dict: {"available": bool, "path": str, "version": str}
+    """
+    gl_cfg = _state["config"].get("gitleaks", {})
+    enabled = gl_cfg.get("enabled", True)
+    gl_bin = gl_cfg.get("binary", "gitleaks")
+    gl_path = shutil.which(gl_bin) if enabled else None
+    version = ""
+    if gl_path:
+        if _state["gitleaks_version"] is None:
+            try:
+                proc = subprocess.run(
+                    [gl_path, "version"],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                _state["gitleaks_version"] = proc.stdout.strip() or "unknown"
+            except Exception:
+                _state["gitleaks_version"] = "unknown"
+        version = _state["gitleaks_version"]
+    return {"available": bool(gl_path), "path": gl_path or "", "version": version}
+
+
+def _apply_gitleaks(findings, text):
+    """将 gitleaks findings 应用到文本：Secret 替换为 <RULEID> 占位符并统计 by_label。
+
+    Args:
+        findings: gitleaks JSON 报告的 findings 列表（每项含 RuleID/Secret）
+        text: 原始文本
+
+    Returns:
+        tuple: (redacted_text: str, by_label: dict)
+    """
+    by_label = {}
+    for f in findings:
+        secret = f.get("Secret", "")
+        rule_id = f.get("RuleID", "unknown")
+        if not secret:
+            continue
+        text = text.replace(secret, f"<{rule_id.upper()}>")
+        by_label[rule_id] = by_label.get(rule_id, 0) + 1
+    return text, by_label
+
+
+def _run_gitleaks(text):
+    """子进程调用 gitleaks 扫描文本中的密钥/凭据。
+
+    将文本写入临时文件，执行 `gitleaks dir <临时文件> --report-format json
+    --report-path <report> --no-banner --no-color --exit-code 0`，
+    读取 JSON findings 后替换为占位符，finally 清理临时文件。
+
+    Args:
+        text: 待扫描文本
+
+    Returns:
+        tuple: (redacted_text: str, by_label: dict)
+
+    Raises:
+        RuntimeError: gitleaks 执行失败或超时
+    """
+    gl_cfg = _state["config"].get("gitleaks", {})
+    gl_bin = gl_cfg.get("binary", "gitleaks")
+    timeout = gl_cfg.get("timeout", 30)
+
+    tmp_dir = tempfile.mkdtemp(prefix="privacy-filter-gitleaks-")
+    tmp_file = Path(tmp_dir) / "scan.txt"
+    report_file = Path(tmp_dir) / "report.json"
+    try:
+        tmp_file.write_text(text, encoding="utf-8")
+        proc = subprocess.run(
+            [
+                gl_bin, "dir", str(tmp_file),
+                "--report-format", "json",
+                "--report-path", str(report_file),
+                "--no-banner", "--no-color", "--exit-code", "0",
+            ],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        findings = []
+        if report_file.exists():
+            try:
+                findings = json.loads(report_file.read_text(encoding="utf-8") or "[]")
+            except json.JSONDecodeError:
+                findings = []
+        if proc.returncode != 0:
+            raise RuntimeError(f"gitleaks 执行失败 (exit={proc.returncode}): {proc.stderr.strip()[:200]}")
+        return _apply_gitleaks(findings, text)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"gitleaks 扫描超时（{timeout}s）") from e
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _preload_model(log_fn):
     """预加载模型权重到内存（启动时调用，避免首次请求超时）。
 
@@ -375,17 +486,20 @@ def run(config, modules):
         """GET /health — 健康检查（register_api 无参回调，返回 dict 自动包装）"""
         model_cfg = _state["config"].get("model", {})
         env = _state.get("env", {})
+        gl_info = _gitleaks_info()
         return {
             "status": "ok",
             "model_loaded": _state["opf"] is not None,
             "device": env.get("device", model_cfg.get("device", "cpu")),
             "output_mode": model_cfg.get("output_mode", "typed"),
             "checkpoint": model_cfg.get("checkpoint", "~/.opf/privacy_filter"),
+            "gitleaks_available": gl_info["available"],
+            "gitleaks_version": gl_info["version"],
             "environment": env,
         }
 
     def handle_redact(request_info):
-        """POST /redact — 文本脱敏处理"""
+        """POST /redact — 文本脱敏处理（支持 engines 参数选择引擎组合）"""
         request_id = _new_request_id()
         _log(f"[REQUEST_START] ID={request_id} path=/redact")
         try:
@@ -404,31 +518,73 @@ def run(config, modules):
                     "request_id": request_id,
                 })
 
-            opf = _state["opf"]
-            if opf is None:
+            # ── engines 参数校验：子集 {privacy-filter, gitleaks}，默认 [privacy-filter] ──
+            engines = data.get("engines", ["privacy-filter"])
+            valid_engines = {"privacy-filter", "gitleaks"}
+            if (not isinstance(engines, list) or not engines
+                    or any(e not in valid_engines for e in engines)):
+                _log(f"[REQUEST_VALIDATION] ID={request_id} Error: engines 参数非法: {engines}", "WARNING")
+                return _json_response(400, {
+                    "success": False, "data": None,
+                    "error": "engines 必须是非空数组，取值限 privacy-filter / gitleaks",
+                    "request_id": request_id,
+                })
+
+            use_gitleaks = "gitleaks" in engines
+            use_pf = "privacy-filter" in engines
+
+            # gitleaks 被选中但不可用时返回 503（不影响 privacy-filter 单独使用）
+            gl_info = _gitleaks_info() if use_gitleaks else None
+            if use_gitleaks and not gl_info["available"]:
+                _log(f"[REQUEST_VALIDATION] ID={request_id} Error: gitleaks 不可用", "WARNING")
+                return _json_response(503, {
+                    "success": False, "data": None,
+                    "error": "gitleaks 引擎不可用，请先安装（brew install gitleaks）或在 config.toml 中启用",
+                    "request_id": request_id,
+                })
+
+            if use_pf and _state["opf"] is None:
                 return _json_response(503, {
                     "success": False, "data": None,
                     "error": "模型未加载，请稍后重试或检查服务日志",
                     "request_id": request_id,
                 })
 
-            _log(f"[REDACT_START] ID={request_id} text_len={len(text)}")
-            result = opf.redact(text)
-            result_dict = result.to_dict()
+            _log(f"[REDACT_START] ID={request_id} text_len={len(text)} engines={engines}")
 
-            # 请求级 output_mode=redacted 时，后处理折叠标签
-            # （避免调用 set_output_mode 导致模型重新加载）
-            if data.get("output_mode") == "redacted":
-                result_dict = _collapse_to_redacted(result_dict)
+            merged_by_label = {}
+            redacted_text = text
 
-            span_count = result_dict.get("summary", {}).get("span_count", 0)
-            _log(f"[REDACT_SUCCESS] ID={request_id} spans={span_count}")
+            # ── 引擎 1：gitleaks（先执行，密钥替换后再交给 privacy-filter）──
+            if use_gitleaks:
+                gl_text, gl_by_label = _run_gitleaks(text)
+                redacted_text = gl_text
+                for label, count in gl_by_label.items():
+                    merged_by_label[label] = merged_by_label.get(label, 0) + count
+                _log(f"[GITLEAKS_DONE] ID={request_id} findings={sum(gl_by_label.values())}")
+
+            # ── 引擎 2：privacy-filter（对 gitleaks 处理后的文本做 PII 脱敏）──
+            if use_pf:
+                opf = _state["opf"]
+                result = opf.redact(redacted_text)
+                result_dict = result.to_dict()
+
+                # 请求级 output_mode=redacted 时，后处理折叠标签
+                # （避免调用 set_output_mode 导致模型重新加载）
+                if data.get("output_mode") == "redacted":
+                    result_dict = _collapse_to_redacted(result_dict)
+
+                redacted_text = result_dict.get("redacted_text", "")
+                for label, count in result_dict.get("summary", {}).get("by_label", {}).items():
+                    merged_by_label[label] = merged_by_label.get(label, 0) + count
+
+            _log(f"[REDACT_SUCCESS] ID={request_id} by_label={merged_by_label}")
             return _json_response(200, {
                 "success": True,
                 "data": {
-                    "by_label": result_dict.get("summary", {}).get("by_label", {}),
-                    "text": result_dict.get("text", ""),
-                    "redacted_text": result_dict.get("redacted_text", ""),
+                    "by_label": merged_by_label,
+                    "text": text,
+                    "redacted_text": redacted_text,
                 },
                 "error": None,
                 "request_id": request_id,
