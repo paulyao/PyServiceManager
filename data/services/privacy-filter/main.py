@@ -4,8 +4,8 @@
 通过 web-service 模块暴露 HTTP API。
 
 API（通过 web-service 模块提供，URL 自动添加服务名前缀）：
-- GET  /        → 健康检查（模型加载状态、设备、checkpoint 路径）
-- GET  /test    → 脱敏测试页面（静态 HTML）
+- GET  /        → 脱敏测试页面（静态 HTML，平台 Web 按钮默认打开）
+- GET  /health  → 健康检查（模型加载状态、设备、checkpoint 路径）
 - POST /redact  → 文本脱敏（text 必填，output_mode 可选 typed|redacted）
 
 依赖模块：log-enhancer, web-service
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _state = {"config": {}, "opf": None, "lock": threading.Lock()}
 
 
-# 脱敏测试页面（GET /privacy-filter/test）
+# 脱敏测试页面（GET /privacy-filter/，平台 Web 按钮默认打开）
 _TEST_PAGE_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -96,7 +96,7 @@ _TEST_PAGE_HTML = """<!DOCTYPE html>
 </div>
 <footer id="footer">输入 0 字 · 输出 0 字 · 耗时 0ms</footer>
 <script>
-const base = location.pathname.replace(/\\/[^\\/]*$/, '/');  // /privacy-filter/test → /privacy-filter/
+const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';  // /privacy-filter 或 /privacy-filter/ → /privacy-filter/
 const $ = id => document.getElementById(id);
 
 async function doRedact() {
@@ -289,7 +289,7 @@ def run(config, modules):
     # ── Web 路由处理器 ──
 
     def handle_health():
-        """GET / — 健康检查（register_api 无参回调，返回 dict 自动包装）"""
+        """GET /health — 健康检查（register_api 无参回调，返回 dict 自动包装）"""
         model_cfg = _state["config"].get("model", {})
         return {
             "status": "ok",
@@ -374,14 +374,13 @@ def run(config, modules):
     # ── 注册 Web 路由（通过 web-service 模块） ──
     web_mod = modules.get("web-service")
     if web_mod:
-        web_mod.register_api("/", handle_health)
-        web_mod.register_page("/test", _TEST_PAGE_HTML)
+        web_mod.register_page("/", _TEST_PAGE_HTML)
+        web_mod.register_api("/health", handle_health)
         web_mod.register_handler("/redact", "POST", handle_redact)
 
         port_info = web_mod.get_port()
         if port_info.get("success"):
-            _log(f"Privacy Filter 脱敏服务已启动: {port_info['data']['base_url']}")
-            _log(f"测试页面: {port_info['data']['base_url']}/test")
+            _log(f"Privacy Filter 脱敏服务已启动，测试页面: {port_info['data']['base_url']}")
     else:
         _log("web-service 模块未启用，HTTP 接口不可用", "ERROR")
         return
