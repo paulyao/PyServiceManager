@@ -13,14 +13,17 @@ API（通过 web-service 模块提供，URL 自动添加服务名前缀）：
 """
 import json
 import logging
+import platform
+import shutil
 import sys
 import threading
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# 共享状态：config 引用 + 懒加载 OPF 实例 + 线程锁
-_state = {"config": {}, "opf": None, "lock": threading.Lock()}
+# 共享状态：config 引用 + 懒加载 OPF 实例 + 线程锁 + 启动环境检查结果
+_state = {"config": {}, "opf": None, "lock": threading.Lock(), "env": {}}
 
 
 # 脱敏测试页面（GET /privacy-filter/，平台 Web 按钮默认打开）
@@ -218,7 +221,7 @@ def _get_opf():
                 from opf import OPF
 
                 opf_kwargs = {
-                    "device": cfg.get("device", "cpu"),
+                    "device": _detect_device(cfg),
                     "output_mode": cfg.get("output_mode", "typed"),
                 }
                 checkpoint = cfg.get("checkpoint")
@@ -258,6 +261,83 @@ def _collapse_to_redacted(result_dict):
     return result_dict
 
 
+def _detect_device(cfg):
+    """解析推理设备。
+
+    config [model].device 为 "cpu"/"cuda" 时直接采用；
+    为 "auto"（默认）时按平台自动选择：Linux 且 CUDA 可用 → cuda，否则 cpu。
+    macOS 无 CUDA，自动回退 cpu。
+    """
+    device = cfg.get("device", "auto")
+    if device in ("cpu", "cuda"):
+        return device
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _check_environment(log_fn):
+    """启动时环境检查（跨平台，含 Linux）。
+
+    检查操作系统、Python 版本、opf 源码路径、torch/CUDA、推理设备、
+    checkpoint、gitleaks 二进制，记录日志并缓存到 _state["env"] 供 /health 暴露。
+    """
+    env = {
+        "system": platform.system(),
+        "machine": platform.machine(),
+        "python": sys.version.split()[0],
+    }
+    log_fn(f"[ENV] 操作系统: {env['system']} {env['machine']} | Python {env['python']}")
+
+    model_cfg = _state["config"].get("model", {})
+
+    # opf 源码路径
+    source_path = model_cfg.get("source_path", "")
+    env["opf_source_ok"] = bool(source_path and Path(source_path).exists())
+    log_fn(f"[ENV] opf 源码路径: {source_path or '(未配置)'} -> {'OK' if env['opf_source_ok'] else '缺失'}",
+           "INFO" if env["opf_source_ok"] else "WARNING")
+
+    # torch 与 CUDA（Linux 下 CUDA 决定是否启用 GPU 推理）
+    torch_ok, cuda_ok = False, False
+    try:
+        import torch
+        torch_ok = True
+        cuda_ok = bool(torch.cuda.is_available())
+    except Exception as e:
+        log_fn(f"[ENV] torch 不可用: {e}", "ERROR")
+    env["torch_ok"] = torch_ok
+    env["cuda_ok"] = cuda_ok
+    log_fn(f"[ENV] torch: {'OK' if torch_ok else '缺失'} | CUDA: {'可用' if cuda_ok else '不可用'}")
+
+    # 推理设备
+    device = _detect_device(model_cfg)
+    env["device"] = device
+    if model_cfg.get("device") == "cuda" and not cuda_ok:
+        log_fn("[ENV] 配置 device=cuda 但 CUDA 不可用，实际将回退 cpu", "WARNING")
+    log_fn(f"[ENV] 推理设备: {device}")
+
+    # checkpoint
+    ckpt = model_cfg.get("checkpoint") or "~/.opf/privacy_filter"
+    env["checkpoint_ok"] = Path(ckpt).expanduser().exists()
+    log_fn(f"[ENV] checkpoint: {ckpt} -> {'OK' if env['checkpoint_ok'] else '未下载(首次将自动下载)'}")
+
+    # gitleaks 二进制（可选引擎）
+    gl_cfg = _state["config"].get("gitleaks", {})
+    gl_bin = gl_cfg.get("binary", "gitleaks")
+    gl_path = shutil.which(gl_bin)
+    env["gitleaks_ok"] = bool(gl_path)
+    env["gitleaks_path"] = gl_path or ""
+    log_fn(f"[ENV] gitleaks: {gl_path or '未安装(可选)'}",
+           "INFO" if gl_path else "WARNING")
+
+    _state["env"] = env
+    return env
+
+
 def _preload_model(log_fn):
     """预加载模型权重到内存（启动时调用，避免首次请求超时）。
 
@@ -286,17 +366,22 @@ def run(config, modules):
         else:
             getattr(logger, level.lower(), logger.info)(msg)
 
+    # ── 启动环境检查（跨平台，含 Linux/CUDA） ──
+    _check_environment(_log)
+
     # ── Web 路由处理器 ──
 
     def handle_health():
         """GET /health — 健康检查（register_api 无参回调，返回 dict 自动包装）"""
         model_cfg = _state["config"].get("model", {})
+        env = _state.get("env", {})
         return {
             "status": "ok",
             "model_loaded": _state["opf"] is not None,
-            "device": model_cfg.get("device", "cpu"),
+            "device": env.get("device", model_cfg.get("device", "cpu")),
             "output_mode": model_cfg.get("output_mode", "typed"),
             "checkpoint": model_cfg.get("checkpoint", "~/.opf/privacy_filter"),
+            "environment": env,
         }
 
     def handle_redact(request_info):
