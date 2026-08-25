@@ -20,8 +20,8 @@ run_hour = 9
 
 [monitor]
 rate_limit_delay = 0.5
-# 同一成员告警去重天数，N 天内只告警一次，默认 1
-alarm_dedup_days = 1
+# 同一成员告警去重天数，N 天内只告警一次，默认 30（每月一次）
+alarm_dedup_days = 30
 # 前端自动刷新间隔（秒），默认 60
 refresh_interval = 60
 # 账号自动清理阈值：距下次重置不足 24h 且总计已用 ≤ 此值时自动删除
