@@ -14,7 +14,6 @@ API（通过 web-service 模块提供，URL 自动添加服务名前缀）：
 import json
 import logging
 import platform
-import shutil
 import sys
 import threading
 import time
@@ -284,7 +283,7 @@ def _check_environment(log_fn):
     """启动时环境检查（跨平台，含 Linux）。
 
     检查操作系统、Python 版本、opf 源码路径、torch/CUDA、推理设备、
-    checkpoint、gitleaks 二进制，记录日志并缓存到 _state["env"] 供 /health 暴露。
+    checkpoint，记录日志并缓存到 _state["env"] 供 /health 暴露。
     """
     env = {
         "system": platform.system(),
@@ -324,15 +323,6 @@ def _check_environment(log_fn):
     ckpt = model_cfg.get("checkpoint") or "~/.opf/privacy_filter"
     env["checkpoint_ok"] = Path(ckpt).expanduser().exists()
     log_fn(f"[ENV] checkpoint: {ckpt} -> {'OK' if env['checkpoint_ok'] else '未下载(首次将自动下载)'}")
-
-    # gitleaks 二进制（可选引擎）
-    gl_cfg = _state["config"].get("gitleaks", {})
-    gl_bin = gl_cfg.get("binary", "gitleaks")
-    gl_path = shutil.which(gl_bin)
-    env["gitleaks_ok"] = bool(gl_path)
-    env["gitleaks_path"] = gl_path or ""
-    log_fn(f"[ENV] gitleaks: {gl_path or '未安装(可选)'}",
-           "INFO" if gl_path else "WARNING")
 
     _state["env"] = env
     return env
