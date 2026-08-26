@@ -5,8 +5,3 @@ source_path = "/Users/paulyao/work/2026/privacy-filter"  # opf 包源码路径
 device = "auto"              # 推理设备：auto（Linux+CUDA→cuda，否则 cpu）/ cpu / cuda
 output_mode = "typed"        # typed（保留标签类型）或 redacted（统一脱敏标记）
 # checkpoint = ""            # 可选：自定义模型路径，留空使用默认 ~/.opf/privacy_filter
-
-[gitleaks]
-enabled = true               # 是否启用 gitleaks 密钥扫描引擎（缺失时仅告警，不阻塞启动）
-binary = "gitleaks"          # gitleaks 二进制路径（在 PATH 中可直接写命令名）
-timeout = 30                 # 子进程调用超时（秒）
