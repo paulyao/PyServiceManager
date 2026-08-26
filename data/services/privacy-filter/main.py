@@ -29,6 +29,20 @@ logger = logging.getLogger(__name__)
 # 共享状态：config 引用 + 懒加载 OPF 实例 + 线程锁 + 启动环境检查结果 + gitleaks 版本缓存
 _state = {"config": {}, "opf": None, "lock": threading.Lock(), "env": {}, "gitleaks_version": None}
 
+# gitleaks 扩展规则：在默认规则基础上补充通用 sk- 前缀 API Key 规则
+# （默认规则仅匹配 OpenAI 官方格式（含 t3BlbkFJ），第三方网关的 sk-+hex 格式会漏检）
+_GITLEAKS_CONFIG = """title = "privacy-filter extended rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-sk-api-key"
+description = "Generic sk- prefixed API key (OpenAI-compatible / third-party gateway)"
+regex = '''\\bsk-[a-zA-Z0-9_-]{20,}\\b'''
+keywords = ["sk-"]
+"""
+
 
 # 脱敏测试页面（GET /privacy-filter/，平台 Web 按钮默认打开）
 _TEST_PAGE_HTML = """<!DOCTYPE html>
@@ -390,11 +404,15 @@ def _apply_gitleaks(findings, text):
         tuple: (redacted_text: str, by_label: dict)
     """
     by_label = {}
+    seen = set()
     for f in findings:
         secret = f.get("Secret", "")
         rule_id = f.get("RuleID", "unknown")
-        if not secret:
+        # 同一 Secret 可能被多条规则同时命中（如默认 generic-api-key 与自定义 sk- 规则），
+        # 按 Secret 去重避免重复计数
+        if not secret or secret in seen or secret not in text:
             continue
+        seen.add(secret)
         text = text.replace(secret, f"<{rule_id.upper()}>")
         by_label[rule_id] = by_label.get(rule_id, 0) + 1
     return text, by_label
@@ -405,6 +423,7 @@ def _run_gitleaks(text):
 
     将文本写入临时文件，执行 `gitleaks dir <临时文件> --report-format json
     --report-path <report> --no-banner --no-color --exit-code 0`，
+    使用内置扩展规则（默认规则 + 通用 sk- 前缀 API Key 规则），
     读取 JSON findings 后替换为占位符，finally 清理临时文件。
 
     Args:
@@ -423,11 +442,14 @@ def _run_gitleaks(text):
     tmp_dir = tempfile.mkdtemp(prefix="privacy-filter-gitleaks-")
     tmp_file = Path(tmp_dir) / "scan.txt"
     report_file = Path(tmp_dir) / "report.json"
+    config_file = Path(tmp_dir) / "gitleaks.toml"
     try:
         tmp_file.write_text(text, encoding="utf-8")
+        config_file.write_text(_GITLEAKS_CONFIG, encoding="utf-8")
         proc = subprocess.run(
             [
                 gl_bin, "dir", str(tmp_file),
+                "--config", str(config_file),
                 "--report-format", "json",
                 "--report-path", str(report_file),
                 "--no-banner", "--no-color", "--exit-code", "0",
