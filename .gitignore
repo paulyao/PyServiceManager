@@ -18,3 +18,4 @@ data/
 *.swo
 .qoder/
 .omc/
+graphify-out/
