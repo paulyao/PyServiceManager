@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Filter 中文 PII 脱敏</title>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+        background: #f5f6f8; color: #24292f;
+        display: flex; flex-direction: column; min-height: 100vh;
+    }
+    .container { max-width: 900px; width: 100%; margin: 0 auto; padding: 24px 16px; flex: 1; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #57606a; margin-bottom: 16px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid #d0d7de; }
+    .tab {
+        padding: 8px 16px; font-size: 14px; cursor: pointer; border: none;
+        background: none; color: #57606a; border-bottom: 2px solid transparent;
+    }
+    .tab.active { color: #0969da; border-bottom-color: #0969da; font-weight: 600; }
+    textarea {
+        width: 100%; height: 130px; padding: 12px;
+        border: 1px solid #d0d7de; border-radius: 6px;
+        font-size: 14px; font-family: inherit; resize: vertical;
+    }
+    textarea:focus { outline: none; border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,.15); }
+    .toolbar { display: flex; align-items: center; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
+    .toolbar label { font-size: 13px; color: #57606a; display: flex; align-items: center; gap: 5px; }
+    select, input[type=color] { padding: 5px 8px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 13px; }
+    button {
+        padding: 8px 18px; background: #0969da; color: #fff; border: none;
+        border-radius: 6px; font-size: 14px; cursor: pointer;
+    }
+    button.ghost { background: #fff; color: #24292f; border: 1px solid #d0d7de; }
+    button:hover { opacity: .92; }
+    button:disabled { background: #a0c7f0; color: #fff; cursor: not-allowed; border-color: #a0c7f0; }
+    .card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px; font-size: 14px; }
+    h2 { font-size: 13px; color: #57606a; margin: 16px 0 8px; font-weight: 600; }
+    .hl { line-height: 1.9; word-break: break-word; white-space: pre-wrap; }
+    .ent { border-radius: 3px; padding: 1px 3px; }
+    .output { white-space: pre-wrap; word-break: break-word; min-height: 40px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .badge { font-size: 12px; border-radius: 10px; padding: 2px 10px; color: #fff; }
+    .error-msg {
+        display: none; background: #fff1f0; border: 1px solid #ffccc7; color: #cf1322;
+        border-radius: 6px; padding: 10px 12px; font-size: 13px; margin: 12px 0; word-break: break-all;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eaeef2; }
+    th { color: #57606a; font-weight: 600; }
+    .imgwrap { position: relative; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 8px; text-align: center; }
+    .imgwrap img { max-width: 100%; max-height: 460px; }
+    details { margin-top: 10px; font-size: 13px; }
+    summary { cursor: pointer; color: #57606a; }
+    footer { text-align: center; font-size: 12px; color: #8b949e; padding: 10px 0 16px; }
+    .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Privacy Filter 中文 PII 脱敏</h1>
+    <p class="sub">文本走 AIguard（Qwen3 NER，21 类实体，&lt;label&gt; 占位符）；图像走 PaddleOCR + 正则识别 + 马赛克</p>
+    <div class="tabs">
+        <button class="tab active" id="tab-text" onclick="switchMode('text')">文本脱敏</button>
+        <button class="tab" id="tab-image" onclick="switchMode('image')">图像脱敏</button>
+    </div>
+    <div class="error-msg" id="error"></div>
+
+    <div id="pane-text">
+        <textarea id="input" placeholder="例如：张伟的手机号是13812345678，身份证号1101011990030701X，邮箱zhangwei@example.com">张伟的手机号是13812345678，身份证号1101011990030701X，邮箱zhangwei@example.com，家住北京市朝阳区望京街道。</textarea>
+        <div class="toolbar">
+            <button id="btn-anon" onclick="runText(true)">脱敏处理</button>
+            <button class="ghost" id="btn-detect" onclick="runText(false)">仅识别</button>
+            <span id="device-text" style="font-size:12px;color:#8b949e;margin-left:auto"></span>
+        </div>
+        <div id="text-result" class="hidden">
+            <h2>原文高亮</h2>
+            <div class="card hl" id="highlight"></div>
+            <h2>脱敏结果</h2>
+            <div class="card output" id="output"></div>
+            <div class="badges" id="badges"></div>
+        </div>
+    </div>
+
+    <div id="pane-image" class="hidden">
+        <div class="toolbar">
+            <input type="file" id="file" accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
+            <label>样式
+                <select id="style">
+                    <option value="pixel">像素马赛克</option>
+                    <option value="blur">高斯模糊</option>
+                    <option value="fill">纯色填充</option>
+                </select>
+            </label>
+            <label id="color-label">颜色 <input type="color" id="fillcolor" value="#000000"></label>
+            <button id="btn-img" onclick="runImage(true)">图像脱敏</button>
+            <button class="ghost" id="btn-img-detect" onclick="runImage(false)">仅识别</button>
+        </div>
+        <div id="img-result" class="hidden">
+            <h2>结果图像 <button class="ghost" style="font-size:12px;padding:3px 10px;margin-left:8px" id="toggle-orig" onclick="toggleOrig()">查看原图</button></h2>
+            <div class="imgwrap"><img id="result-img" alt="处理结果"></div>
+            <h2>识别实体</h2>
+            <div class="card"><table id="ent-table"></table></div>
+            <details><summary>OCR 全文</summary><div class="card" id="ocr-text" style="margin-top:8px;white-space:pre-wrap"></div></details>
+        </div>
+    </div>
+</div>
+<footer id="footer">Privacy Filter · cn_pii_anonymization</footer>
+<script>
+const base = location.pathname.replace(/\/+$/, '');  // /privacy-filter → 端点 /privacy-filter/xxx
+const $ = id => document.getElementById(id);
+let mode = 'text', originalUrl = '', resultUrl = '', lastImage = '';
+
+const PALETTE = ['#0969da','#bf3989','#9a6700','#116329','#cf222e','#8250df','#1b7c83','#a05a00',
+                 '#5e2a84','#0a6b4d','#8b0000','#3d4b62','#7d4b12','#005cc2','#6e40c9'];
+const LABELS = {name:'姓名',id_card:'身份证',mobile:'手机',address:'地址',email:'邮箱',passport:'护照',
+    hkmtp_pass:'港澳台通行证',social_security:'社保卡',drivers_license:'驾照',plate_number:'车牌',
+    bank_card:'银行卡',credit_card:'信用卡',bank_password:'银行密码',birth_date:'出生日期',
+    insurance_policy:'保单',taobao_order:'淘宝单',jd_order:'京东单',pdd_order:'拼多多单',
+    ems_tracking:'EMS单',sf_tracking:'顺丰单',yto_tracking:'圆通单',
+    CN_PHONE_NUMBER:'手机号',CN_ID_CARD:'身份证',CN_BANK_CARD:'银行卡',CN_PASSPORT:'护照',
+    CN_EMAIL:'邮箱',CN_NAME:'姓名',CN_ADDRESS:'地址',CN_CVV:'安全码',CN_CARD_EXPIRY:'有效期'};
+const colorOf = label => {
+    let h = 0;
+    for (const c of label) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return PALETTE[h % PALETTE.length];
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const show = (msg, box) => { box.style.display = 'block'; box.textContent = msg; };
+const hide = box => box.style.display = 'none';
+
+function switchMode(m) {
+    mode = m;
+    $('tab-text').classList.toggle('active', m === 'text');
+    $('tab-image').classList.toggle('active', m === 'image');
+    $('pane-text').classList.toggle('hidden', m !== 'text');
+    $('pane-image').classList.toggle('hidden', m !== 'image');
+    hide($('error'));
+}
+
+function badges(list, key) {
+    const counts = {};
+    list.forEach(e => counts[e[key]] = (counts[e[key]] || 0) + 1);
+    const box = $('badges');
+    box.innerHTML = '';
+    Object.entries(counts).forEach(([label, n]) => {
+        const span = document.createElement('span');
+        span.className = 'badge';
+        span.style.background = colorOf(label);
+        span.textContent = (LABELS[label] || label) + ' × ' + n;
+        box.appendChild(span);
+    });
+}
+
+function highlight(text, ents) {
+    let html = '', cursor = 0;
+    for (const e of [...ents].sort((a, b) => a.start - b.start)) {
+        if (e.start < cursor) continue;
+        html += esc(text.slice(cursor, e.start));
+        html += '<span class="ent" style="background:' + colorOf(e.label) + '33;color:'
+              + colorOf(e.label) + '" title="' + esc(e.label) + ' (' + Math.round(e.score * 100) + '%)">'
+              + esc(e.text) + '</span>';
+        cursor = e.end;
+    }
+    return html + esc(text.slice(cursor));
+}
+
+async function post(path, payload, btns) {
+    btns.forEach(b => { b.disabled = true; b.dataset.old = b.textContent; b.textContent = '处理中...'; });
+    const t0 = performance.now();
+    try {
+        const resp = await fetch(base + path, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const elapsed = Math.round(performance.now() - t0);
+        const body = await resp.json();
+        if (!resp.ok || body.success === false) {
+            show('失败: ' + (body.error || body.detail || ('HTTP ' + resp.status)), $('error'));
+            return null;
+        }
+        return { data: body.data, elapsed, id: body.request_id };
+    } catch (e) {
+        show('请求失败: ' + e, $('error'));
+        return null;
+    } finally {
+        btns.forEach(b => { b.disabled = false; b.textContent = b.dataset.old; });
+    }
+}
+
+async function runText(anonymize) {
+    hide($('error'));
+    const text = $('input').value;
+    if (!text.trim()) { show('请输入待处理文本', $('error')); return; }
+    const r = await post(anonymize ? '/text/anonymize' : '/text/analyze',
+                         { text }, [$('btn-anon'), $('btn-detect')]);
+    if (!r) return;
+    const d = r.data;
+    $('highlight').innerHTML = highlight(d.original_text || text, d.pii_entities);
+    $('output').textContent = anonymize ? d.anonymized_text : '（仅识别模式，未改写文本）';
+    badges(d.pii_entities, 'label');
+    $('text-result').classList.remove('hidden');
+    $('device-text').textContent = 'device: ' + d.device;
+    $('footer').textContent = (anonymize ? '输入 ' + d.original_text.length + ' 字 · 输出 ' + d.anonymized_text.length + ' 字' : '文本 ' + text.length + ' 字')
+        + ' · 实体 ' + d.entity_count + ' · 耗时 ' + r.elapsed + 'ms · request_id: ' + r.id;
+}
+
+function readFile() {
+    return new Promise((resolve, reject) => {
+        const f = $('file').files[0];
+        if (!f) { reject(new Error('请选择图片文件')); return; }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',', 2)[1]);
+        reader.onerror = () => reject(new Error('文件读取失败'));
+        reader.readAsDataURL(f);
+    });
+}
+
+async function runImage(anonymize) {
+    hide($('error'));
+    let imageBase64;
+    try { imageBase64 = await readFile(); } catch (e) { show(e.message, $('error')); return; }
+    const payload = { image_base64: imageBase64 };
+    if (anonymize) {
+        payload.mosaic_style = $('style').value;
+        if (payload.mosaic_style === 'fill') {
+            const hex = $('fillcolor').value.slice(1);
+            payload.fill_color = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)).join(',');
+        }
+    }
+    const r = await post(anonymize ? '/image/anonymize' : '/image/analyze', payload,
+                         [$('btn-img'), $('btn-img-detect')]);
+    if (!r) return;
+    const d = r.data;
+    originalUrl = 'data:image/png;base64,' + imageBase64;
+    resultUrl = anonymize ? 'data:image/png;base64,' + d.image_base64 : originalUrl;
+    $('result-img').src = resultUrl;
+    $('toggle-orig').style.display = anonymize ? '' : 'none';
+    $('img-result').classList.remove('hidden');
+    $('ent-table').innerHTML = '<tr><th>类型</th><th>文本</th><th>位置</th><th>置信度</th></tr>'
+        + (d.pii_entities.map(e => '<tr><td style="color:' + colorOf(e.entity_type) + '">'
+            + (LABELS[e.entity_type] || e.entity_type) + '</td><td>' + esc(e.text) + '</td><td>'
+            + e.bbox.left + ',' + e.bbox.top + ' · ' + e.bbox.width + '×' + e.bbox.height
+            + '</td><td>' + Math.round(e.score * 100) + '%</td></tr>').join('')
+           || '<tr><td colspan="4">未识别到 PII</td></tr>');
+    $('ocr-text').textContent = d.ocr_text || '（OCR 无文本）';
+    $('footer').textContent = '图像 ' + d.image_size.width + '×' + d.image_size.height
+        + ' · 实体 ' + d.entity_count + ' · OCR 置信度 ' + Math.round((d.ocr_confidence || 0) * 100) + '%'
+        + ' · 耗时 ' + r.elapsed + 'ms · request_id: ' + r.id;
+}
+
+function toggleOrig() {
+    const showingOrig = $('result-img').src === originalUrl;
+    $('result-img').src = showingOrig ? resultUrl : originalUrl;
+    $('toggle-orig').textContent = showingOrig ? '查看原图' : '查看结果图';
+}
+
+$('input').addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') runText(true);
+});
+$('style').addEventListener('change', () => {
+    $('color-label').style.display = $('style').value === 'fill' ? '' : 'none';
+});
+$('color-label').style.display = 'none';
+</script>
+</body>
+</html>
