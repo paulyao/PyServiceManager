@@ -331,14 +331,19 @@ def _resolve_aiguard_device(cuda_ok, mps_ok):
 
 
 def _hf_model_cached(model_name):
-    """探测 HuggingFace 模型是否已缓存（仅 stat，不触发下载）。"""
+    """探测 HuggingFace 模型是否已缓存（仅 stat，不触发下载）。
+
+    HF_HOME 是缓存根（模型在其 hub/ 子目录），HF_HUB_CACHE 才是 hub 本身，
+    故三个候选依次探测，避免显式配 HF_HOME 时被误判为未缓存。
+    """
     org, _, repo = model_name.partition("/")
     if not repo:
         return False
-    hub = Path(os.environ.get("HF_HOME", Path("~/.cache/huggingface/hub").expanduser()))
-    if not hub.is_absolute():
-        hub = Path("~/.cache/huggingface/hub").expanduser()
-    return (hub / f"models--{org}--{repo}").is_dir()
+    marker = f"models--{org}--{repo}"
+    home = os.environ.get("HF_HOME") or str(Path("~/.cache/huggingface").expanduser())
+    candidates = [Path(p).expanduser() for p in
+                  (os.environ.get("HF_HUB_CACHE"), str(Path(home) / "hub"), home) if p]
+    return any((c / marker).is_dir() for c in candidates)
 
 
 def _preload(log_fn):
