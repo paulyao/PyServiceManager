@@ -1,7 +1,32 @@
 # Privacy Filter 脱敏服务配置
+# 文本管线：AIguard（Qwen3 NER）；图像管线：PaddleOCR + Presidio 正则识别 + 马赛克
 
 [model]
-source_path = "/Users/paulyao/work/2026/privacy-filter"  # opf 包源码路径
-device = "auto"              # 推理设备：auto（Linux+CUDA→cuda，否则 cpu）/ cpu / cuda
-output_mode = "typed"        # typed（保留标签类型）或 redacted（统一脱敏标记）
-# checkpoint = ""            # 可选：自定义模型路径，留空使用默认 ~/.opf/privacy_filter
+# cn_pii_anonymization 包源码目录（其父目录插入 sys.path）
+# 服务器部署需改为服务器上的实际路径
+source_path = "/Users/paulyao/work/2026/cn_pii_anonymization/src"
+
+[aiguard]
+enabled = true
+device = "auto"                 # auto(cuda>mps>cpu) | cpu | mps | cuda
+max_request_chars = 5000        # 单请求文本长度上限（防回调 300s 超时）
+chunk_chars = 500               # 长文本推理分块长度（桥接 AIGUARD_MAX_CHARS）
+cache_size = 64                 # AIguard 推理结果 LRU 缓存条目上限
+
+[image]
+enabled = true
+max_image_bytes = 10485760      # 解码后图像大小上限（10MB）
+ocr_cache_size = 64             # OCR 结果 LRU 缓存条目上限
+ocr_use_gpu = false             # Linux GPU 服务器置 true（需 paddlepaddle-gpu）
+
+[logging]
+level = "INFO"                  # 源模块 loguru 级别；DEBUG 会打印整份 OCR 结果字典
+
+[preload]
+aiguard = true                  # 启动即加载模型（首次含 ~2.4GB 下载）
+image = true                    # 启动即初始化 OCR/LAC/UIE
+
+[env]                           # 首次 import cn_pii_anonymization 前注入 os.environ
+# HF_ENDPOINT = "https://hf-mirror.com"
+# HF_HOME = "~/.cache/huggingface"
+# HF_HUB_OFFLINE = "0"          # 模型已缓存时服务默认置 1（跳过联网校验）；需拉取新 revision 时显式覆盖
