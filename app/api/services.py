@@ -91,36 +91,28 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
         )
         all_enabled = [r[0] for r in sm_result.all()]
 
-        # Load routes.json to check which services actually have registered routes
-        data_dir_str = module.config.get("data_dir", "") if hasattr(module, 'config') and module.config else ""
-        if data_dir_str:
-            routes_file = Path(data_dir_str) / "routes.json"
-        else:
-            routes_file = MODULES_DIR / "web-service" / "data" / "routes.json"
-            # Fallback to data/modules/web-service/data/routes.json
-            if not routes_file.exists():
-                routes_file = DATA_DIR / "modules" / "web-service" / "data" / "routes.json"
-
-        # Parse routes.json and extract service names that have registered PAGES (not just APIs)
+        # Check each enabled service for registered pages in their own .web-service/routes.json
         services_with_pages = set()
-        if routes_file and routes_file.exists():
-            try:
-                routes_data = json.loads(routes_file.read_text(encoding="utf-8"))
-                for path, methods in routes_data.items():
-                    # Check if any method has type "page"
-                    for method, info in methods.items():
-                        if isinstance(info, dict) and info.get("type") == "page":
-                            # Extract service name from path like "/heartbeat/" -> "heartbeat"
-                            parts = path.strip("/").split("/")
-                            if parts and parts[0]:
-                                services_with_pages.add(parts[0])
+        for svc_name in all_enabled:
+            # Each service stores its routes in data/services/{name}/.web-service/routes.json
+            svc_routes_file = SERVICES_DIR / svc_name / ".web-service" / "routes.json"
+            if svc_routes_file.exists():
+                try:
+                    routes_data = json.loads(svc_routes_file.read_text(encoding="utf-8"))
+                    for path, methods in routes_data.items():
+                        # Check if any method has type "page"
+                        for method, info in methods.items():
+                            if isinstance(info, dict) and info.get("type") == "page":
+                                services_with_pages.add(svc_name)
+                                break
+                        if svc_name in services_with_pages:
                             break
-            except Exception:
-                # If routes.json is invalid, fall back to showing all enabled services
-                services_with_pages = set(all_enabled)
-        else:
-            # No routes.json yet, show all enabled services (first-time scenario)
-            services_with_pages = set(all_enabled)
+                except Exception:
+                    # If routes.json is invalid, include the service (fallback)
+                    services_with_pages.add(svc_name)
+            else:
+                # No routes.json yet, include the service (first-time scenario)
+                services_with_pages.add(svc_name)
 
         # Filter: only return services that are both enabled AND have registered pages
         service_names = [name for name in all_enabled if name in services_with_pages]
