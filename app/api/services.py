@@ -54,12 +54,15 @@ async def create_service(data: ServiceCreate, session: AsyncSession = Depends(ge
 
 @router.get("/web-enabled")
 async def get_web_enabled_services(session: AsyncSession = Depends(get_session)):
-    """Return services with web-service module enabled and the daemon port."""
+    """Return services with web-service module enabled AND at least one registered route."""
+    import json
+
     mod_result = await session.execute(select(Module).where(Module.name == "web-service"))
     module = mod_result.scalar_one_or_none()
 
     port = 8910  # default
     service_names = []
+    routes_file = None
 
     if module:
         # Read port from module config.toml
@@ -86,7 +89,37 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
                 ServiceModule.enabled == True,  # noqa: E712
             )
         )
-        service_names = [r[0] for r in sm_result.all()]
+        all_enabled = [r[0] for r in sm_result.all()]
+
+        # Load routes.json to check which services actually have registered routes
+        data_dir_str = module.config.get("data_dir", "") if hasattr(module, 'config') and module.config else ""
+        if data_dir_str:
+            routes_file = Path(data_dir_str) / "routes.json"
+        else:
+            routes_file = MODULES_DIR / "web-service" / "data" / "routes.json"
+            # Fallback to data/modules/web-service/data/routes.json
+            if not routes_file.exists():
+                routes_file = DATA_DIR / "modules" / "web-service" / "data" / "routes.json"
+
+        # Parse routes.json and extract service names that have routes
+        services_with_routes = set()
+        if routes_file and routes_file.exists():
+            try:
+                routes_data = json.loads(routes_file.read_text(encoding="utf-8"))
+                for path in routes_data.keys():
+                    # Extract service name from path like "/heartbeat/api/status" -> "heartbeat"
+                    parts = path.strip("/").split("/")
+                    if parts and parts[0]:
+                        services_with_routes.add(parts[0])
+            except Exception:
+                # If routes.json is invalid, fall back to showing all enabled services
+                services_with_routes = set(all_enabled)
+        else:
+            # No routes.json yet, show all enabled services (first-time scenario)
+            services_with_routes = set(all_enabled)
+
+        # Filter: only return services that are both enabled AND have registered routes
+        service_names = [name for name in all_enabled if name in services_with_routes]
 
     return {"services": service_names, "port": port}
 
