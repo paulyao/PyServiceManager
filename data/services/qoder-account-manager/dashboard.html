@@ -531,14 +531,21 @@ async function fetchUsage() {
     renderUsageOrg('qoder_cn', 'usage-tbody-cn');
     renderUsageStats('qoder', 'usage-stats-qoder');
     renderUsageStats('qoder_cn', 'usage-stats-cn');
-    renderSharedPkg(d.shared_pkg, 'shared-pkg-qoder');
-    renderSharedPkg(d.shared_pkg_cn, 'shared-pkg-cn');
+    renderSharedPkg(d.shared_pkg, 'shared-pkg-qoder', 'qoder');
+    renderSharedPkg(d.shared_pkg_cn, 'shared-pkg-cn', 'qoder_cn');
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
-function renderSharedPkg(pkg, containerId) {
+const SHARED_PKG_BUY_URLS = {
+  qoder: 'https://market.aliyun.com/detail/cmgj00073967.html?spm=5176.730005.result.4.1344414aJzR3dn&innerSource=search_Qoder#sku=yuncode6796700001',
+  qoder_cn: 'https://qoder.console.aliyun.com/instances/teams/019ecf59-bfc0-7a52-bed8-51e536d5c5e5/summary?regionId=hangzhou-center&edition=qoderwork'
+};
+
+function renderSharedPkg(pkg, containerId, org) {
   const el = document.getElementById(containerId);
-  if (!pkg) { el.innerHTML = ''; return; }
+  const buyCard = '<div class="stat-card"><div class="label">购买共享包</div>' +
+    '<div class="value" style="font-size:16px"><a href="' + SHARED_PKG_BUY_URLS[org] + '" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">前往购买 ↗</a></div></div>';
+  if (!pkg) { el.innerHTML = buyCard; return; }
   const pct = pkg.limitValue > 0 ? (pkg.usedValue / pkg.limitValue * 100) : 0;
   const bc = barClass(pct);
   el.innerHTML =
@@ -546,7 +553,8 @@ function renderSharedPkg(pkg, containerId) {
     '<div class="stat-card"><div class="label">共享包初始总额度</div><div class="value">' + fmt(pkg.limitValue||0) + '</div></div>' +
     '<div class="stat-card"><div class="label">共享包已用（' + pct.toFixed(1) + '%）</div><div class="value ' + (pct >= 80 ? 'danger' : '') + '">' + fmt(pkg.usedValue||0) + '</div>' +
     '<div class="bar-wrap" style="margin-top:6px"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div></div>' +
-    '<div class="stat-card"><div class="label">最近到期时间</div><div class="value" style="font-size:16px">' + esc(pkg.expiresAt ? pkg.expiresAt.slice(0, 16).replace('T', ' ') : '-') + '</div></div>';
+    '<div class="stat-card"><div class="label">最近到期时间</div><div class="value" style="font-size:16px">' + esc(pkg.expiresAt ? pkg.expiresAt.slice(0, 16).replace('T', ' ') : '-') + '</div></div>' +
+    buyCard;
 }
 
 // ── 用量监控排序 ──
