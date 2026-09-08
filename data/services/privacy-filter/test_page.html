@@ -194,17 +194,23 @@ async function runText(anonymize) {
     hide($('error'));
     const text = $('input').value;
     if (!text.trim()) { show('请输入待处理文本', $('error')); return; }
-    const r = await post(anonymize ? '/text/anonymize' : '/text/analyze',
-                         { text }, [$('btn-anon'), $('btn-detect')]);
+    const btns = [$('btn-anon'), $('btn-detect')];
+    const r = await post('/text/analyze', { text }, btns);
     if (!r) return;
     const d = r.data;
-    $('highlight').innerHTML = highlight(d.original_text || text, d.pii_entities);
-    $('output').textContent = anonymize ? d.anonymized_text : '（仅识别模式，未改写文本）';
+    let masked = null, last = r;
+    if (anonymize) {
+        last = await post('/text/anonymize', { text }, btns);
+        if (!last) return;
+        masked = last.data.anonymized_text;
+    }
+    $('highlight').innerHTML = highlight(text, d.pii_entities);
+    $('output').textContent = anonymize ? masked : '（仅识别模式，未改写文本）';
     badges(d.pii_entities, 'label');
     $('text-result').classList.remove('hidden');
     $('device-text').textContent = 'device: ' + d.device;
-    $('footer').textContent = (anonymize ? '输入 ' + d.original_text.length + ' 字 · 输出 ' + d.anonymized_text.length + ' 字' : '文本 ' + text.length + ' 字')
-        + ' · 实体 ' + d.entity_count + ' · 耗时 ' + r.elapsed + 'ms · request_id: ' + r.id;
+    $('footer').textContent = (anonymize ? '输入 ' + text.length + ' 字 · 输出 ' + masked.length + ' 字' : '文本 ' + text.length + ' 字')
+        + ' · 实体 ' + d.entity_count + ' · 耗时 ' + last.elapsed + 'ms · request_id: ' + last.id;
 }
 
 function readFile() {
@@ -222,20 +228,22 @@ async function runImage(anonymize) {
     hide($('error'));
     let imageBase64;
     try { imageBase64 = await readFile(); } catch (e) { show(e.message, $('error')); return; }
-    const payload = { image_base64: imageBase64 };
+    const btns = [$('btn-img'), $('btn-img-detect')];
+    const r = await post('/image/analyze', { image_base64: imageBase64 }, btns);
+    if (!r) return;
+    const d = r.data;
+    let last = r;
     if (anonymize) {
-        payload.mosaic_style = $('style').value;
+        const payload = { image_base64: imageBase64, mosaic_style: $('style').value };
         if (payload.mosaic_style === 'fill') {
             const hex = $('fillcolor').value.slice(1);
             payload.fill_color = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)).join(',');
         }
+        last = await post('/image/anonymize', payload, btns);
+        if (!last) return;
     }
-    const r = await post(anonymize ? '/image/anonymize' : '/image/analyze', payload,
-                         [$('btn-img'), $('btn-img-detect')]);
-    if (!r) return;
-    const d = r.data;
     originalUrl = 'data:image/png;base64,' + imageBase64;
-    resultUrl = anonymize ? 'data:image/png;base64,' + d.image_base64 : originalUrl;
+    resultUrl = anonymize ? 'data:image/png;base64,' + last.data.image_base64 : originalUrl;
     $('result-img').src = resultUrl;
     $('toggle-orig').style.display = anonymize ? '' : 'none';
     $('img-result').classList.remove('hidden');
@@ -248,7 +256,7 @@ async function runImage(anonymize) {
     $('ocr-text').textContent = d.ocr_text || '（OCR 无文本）';
     $('footer').textContent = '图像 ' + d.image_size.width + '×' + d.image_size.height
         + ' · 实体 ' + d.entity_count + ' · OCR 置信度 ' + Math.round((d.ocr_confidence || 0) * 100) + '%'
-        + ' · 耗时 ' + r.elapsed + 'ms · request_id: ' + r.id;
+        + ' · 耗时 ' + last.elapsed + 'ms · request_id: ' + last.id;
 }
 
 function toggleOrig() {

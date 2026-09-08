@@ -460,15 +460,8 @@ def _handle_text(request_info, request_id, anonymize):
 
     device = engine._device
     if anonymize:
-        anonymized_text, used, by_label = _build_anonymized(text, entities)
-        payload = {
-            "original_text": text,
-            "anonymized_text": anonymized_text,
-            "pii_entities": [{**ent, "anonymized_text": f"<{ent['label']}>"} for ent in used],
-            "by_label": by_label,
-            "entity_count": len(used),
-            "device": device,
-        }
+        anonymized_text, _, _ = _build_anonymized(text, entities)
+        payload = {"anonymized_text": anonymized_text}
     else:
         payload = {
             "pii_entities": entities,
@@ -538,18 +531,18 @@ def _handle_image(request_info, request_id, anonymize):
                 return _error(500, f"PII 识别失败: {e}", request_id)
             raise
 
-    payload = {
-        "pii_entities": found,
-        "by_label": _entity_counts(found, "entity_type"),
-        "entity_count": len(found),
-        "ocr_text": ocr_text,
-        "ocr_confidence": ocr_confidence,
-        "image_size": {"width": image.width, "height": image.height},
-    }
     if anonymize:
-        payload = {"image_base64": out_b64, "mime_type": "image/png", **payload}
+        payload = {"image_base64": out_b64, "mime_type": "image/png"}
     else:
-        payload["has_pii"] = bool(found)
+        payload = {
+            "pii_entities": found,
+            "by_label": _entity_counts(found, "entity_type"),
+            "entity_count": len(found),
+            "ocr_text": ocr_text,
+            "ocr_confidence": ocr_confidence,
+            "image_size": {"width": image.width, "height": image.height},
+            "has_pii": bool(found),
+        }
     return _json_response(200, {"success": True, "data": payload, "error": None,
                                 "request_id": request_id})
 
