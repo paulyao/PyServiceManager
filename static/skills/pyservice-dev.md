@@ -15,7 +15,7 @@ description: 通过 REST API 在 PyService 平台（http://10.0.29.37:8900）上
 
 ## 核心概念
 
-- **模块（Module）**：可复用功能单元，代码是一个 `module.py`（+ 可选 `config.toml`），通过 API 提交。6 个内置模块（http-client、sqlite-helper、mysql-helper、log-enhancer、idaas-eiam、web-service）可直接绑定使用，方法速查见下文。
+- **模块（Module）**：可复用功能单元，代码是一个 `module.py`（+ 可选 `config.toml`），通过 API 提交。5 个内置模块（http-client、sqlite-helper、mysql-helper、log-enhancer、web-service）可直接绑定使用，方法速查见下文。
 - **服务（Service）**：你的业务代码 `main.py` + 配置 `config.toml`，平台为其生成 runner 并作为系统服务托管（Linux systemd / macOS 进程，Agent 无需关心）。
 - **绑定**：服务可绑定多个模块；运行时模块实例注入到你的 `run(config, modules)` 里。
 
@@ -218,8 +218,6 @@ mysql.test_connection(*, host, port=3306, user, password, database)
 ```
 
 **log-enhancer** — `log(message, level="INFO")`，写入增强日志。
-
-**idaas-eiam** — 阿里云 IDaaS 用户/应用管理：`list_users(*, display_name=None, email=None, phone_number=None, ...)`、`get_user(*, user_id)`、`update_user(*, user_id, display_name=None, email=None, ...)`、`list_applications(...)`、`authorize_application_to_users(*, app_id, user_ids)`。
 
 **web-service** — 给服务挂 Web 页面/API，见下节。
 
