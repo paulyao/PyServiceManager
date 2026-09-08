@@ -6,7 +6,7 @@ const skillList = [
         file: '/static/skills/pyservice-dev.md',
         name: 'pyservice-dev',
         title: 'PyService 自定义模块与自定义服务开发指南',
-        description: 'Module 类规范、ctx 对象、生命周期钩子、web-service 注册 API、服务创建全流程与常见坑',
+        description: '面向仅能访问平台 HTTP 接口的 Agent：REST API 全参考、模块/服务编写规范、内置模块方法速查',
     },
 ];
 
