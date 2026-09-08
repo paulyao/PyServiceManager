@@ -131,15 +131,19 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
 <div class="container">
   <h1>Qoder 账号管理</h1>
   <div class="tabs">
-    <button class="tab active" onclick="switchTab('accounts')">Qoder 账号</button>
-    <button class="tab" onclick="switchTab('accounts-cn')">Qoder CN 账号</button>
+    <button class="tab active" onclick="switchTab('accounts')">账号管理</button>
     <button class="tab" onclick="switchTab('usage')">用量监控</button>
     <button class="tab" onclick="switchTab('ai-code')">AI 代码统计</button>
   </div>
 
-  <!-- Tab 1: Qoder 账号 -->
+  <!-- Tab 1: 账号管理（国际版 / CN 子页） -->
   <div id="tab-accounts">
     <div class="updated" id="acc-updated">加载中...</div>
+    <div class="tabs" id="acc-subtabs" style="margin-bottom:16px">
+      <button class="tab active" onclick="switchAccountsOrg(event,'qoder')">Qoder 国际版</button>
+      <button class="tab" onclick="switchAccountsOrg(event,'qoder_cn')">Qoder CN</button>
+    </div>
+    <div id="acc-sec-qoder">
     <div class="search-row">
       <input class="search-box" id="acc-search" type="text" placeholder="搜索姓名或邮箱...">
       <button class="btn-export" onclick="startAddAccount('qoder')">新增</button>
@@ -153,10 +157,8 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
         <tbody id="acc-tbody"></tbody>
       </table>
     </div>
-  </div>
-
-  <!-- Tab 2: Qoder CN 账号 -->
-  <div id="tab-accounts-cn" style="display:none">
+    </div>
+    <div id="acc-sec-qoder_cn" style="display:none">
     <div class="updated" id="cn-updated">加载中...</div>
     <div class="search-row">
       <input class="search-box" id="cn-search" type="text" placeholder="搜索姓名或邮箱...">
@@ -170,6 +172,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
         </tr></thead>
         <tbody id="cn-tbody"></tbody>
       </table>
+    </div>
     </div>
   </div>
 
@@ -290,14 +293,21 @@ function barClass(pct) { return pct >= 80 ? 'red' : pct >= 60 ? 'yellow' : 'gree
 
 function switchTab(name) {
   activeTab = name;
-  document.querySelectorAll('.tabs:not(#usage-subtabs) .tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tabs:not(#usage-subtabs):not(#acc-subtabs) .tab').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
-  ['accounts','accounts-cn','usage','ai-code'].forEach(id => {
+  ['accounts','usage','ai-code'].forEach(id => {
     document.getElementById('tab-' + id).style.display = id === name ? '' : 'none';
   });
-  if (name === 'accounts' || name === 'accounts-cn') fetchAccounts();
+  if (name === 'accounts') fetchAccounts();
   if (name === 'usage') fetchUsage();
   if (name === 'ai-code') { fetchAICodeData(); fetchTrendData(); }
+}
+
+function switchAccountsOrg(ev, org) {
+  document.querySelectorAll('#acc-subtabs .tab').forEach(t => t.classList.remove('active'));
+  ev.target.classList.add('active');
+  document.getElementById('acc-sec-qoder').style.display = org === 'qoder' ? '' : 'none';
+  document.getElementById('acc-sec-qoder_cn').style.display = org === 'qoder_cn' ? '' : 'none';
 }
 
 function switchUsageOrg(ev, org) {
@@ -841,7 +851,7 @@ function sortAI(field) {
 
 // ── 自动刷新 ──
 function restartTimer() { if (timer) clearInterval(timer); timer = setInterval(() => {
-  if (activeTab === 'accounts' || activeTab === 'accounts-cn') fetchAccounts();
+  if (activeTab === 'accounts') fetchAccounts();
   else if (activeTab === 'usage') fetchUsage();
   else if (activeTab === 'ai-code') fetchAICodeData();
 }, refreshMs); }
