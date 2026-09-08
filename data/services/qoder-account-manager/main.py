@@ -460,15 +460,14 @@ def run(config, modules):
                 break
         active = [p for p in packages if p.get("status") == "active"]
         summary = {
-            "totalCount": len(packages),
-            "activeCount": len(active),
+            "totalCount": len(active),
             "limitValue": sum(p.get("limitValue", 0) for p in active),
             "usedValue": sum(p.get("usedValue", 0) for p in active),
             "remainingValue": sum(p.get("remainingValue", 0) for p in active),
             "unit": active[0].get("unit", "credits") if active else "credits",
             "expiresAt": max((p.get("expiresAt", "") for p in active), default=""),
         }
-        _log(f"共享资源包: {o_id} 共 {summary['totalCount']} 个, active {summary['activeCount']} 个, "
+        _log(f"共享资源包(仅active): {o_id} {summary['totalCount']}/{len(packages)} 个, "
              f"剩余 {summary['remainingValue']:.2f} {summary['unit']}")
         return summary
 
