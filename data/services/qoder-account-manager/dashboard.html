@@ -176,7 +176,11 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
   <!-- Tab 3: 用量监控 -->
   <div id="tab-usage" style="display:none">
     <div class="updated" id="usage-updated">加载中...</div>
-    <h2>Qoder 国际版</h2>
+    <div class="tabs" id="usage-subtabs" style="margin-bottom:16px">
+      <button class="tab active" onclick="switchUsageOrg(event,'qoder')">Qoder 国际版</button>
+      <button class="tab" onclick="switchUsageOrg(event,'qoder_cn')">Qoder CN</button>
+    </div>
+    <div id="usage-sec-qoder">
     <div class="stats" id="usage-stats-qoder"></div>
     <div class="stats" id="shared-pkg-qoder"></div>
     <div class="search-row">
@@ -200,7 +204,8 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
         <tbody id="usage-tbody"></tbody>
       </table>
     </div>
-    <h2>Qoder CN</h2>
+    </div>
+    <div id="usage-sec-qoder_cn" style="display:none">
     <div class="stats" id="usage-stats-cn"></div>
     <div class="stats" id="shared-pkg-cn"></div>
     <div class="search-row">
@@ -223,6 +228,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
         </tr></thead>
         <tbody id="usage-tbody-cn"></tbody>
       </table>
+    </div>
     </div>
   </div>
 
@@ -284,7 +290,7 @@ function barClass(pct) { return pct >= 80 ? 'red' : pct >= 60 ? 'yellow' : 'gree
 
 function switchTab(name) {
   activeTab = name;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tabs:not(#usage-subtabs) .tab').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
   ['accounts','accounts-cn','usage','ai-code'].forEach(id => {
     document.getElementById('tab-' + id).style.display = id === name ? '' : 'none';
@@ -292,6 +298,13 @@ function switchTab(name) {
   if (name === 'accounts' || name === 'accounts-cn') fetchAccounts();
   if (name === 'usage') fetchUsage();
   if (name === 'ai-code') { fetchAICodeData(); fetchTrendData(); }
+}
+
+function switchUsageOrg(ev, org) {
+  document.querySelectorAll('#usage-subtabs .tab').forEach(t => t.classList.remove('active'));
+  ev.target.classList.add('active');
+  document.getElementById('usage-sec-qoder').style.display = org === 'qoder' ? '' : 'none';
+  document.getElementById('usage-sec-qoder_cn').style.display = org === 'qoder_cn' ? '' : 'none';
 }
 
 // ── 账号列表 ──
