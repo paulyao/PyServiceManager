@@ -549,7 +549,7 @@ function renderSharedPkg(pkg, containerId, org) {
   const pct = pkg.limitValue > 0 ? (pkg.usedValue / pkg.limitValue * 100) : 0;
   const bc = barClass(pct);
   el.innerHTML =
-    '<div class="stat-card"><div class="label">组织共享包余量（生效中 ' + (pkg.totalCount||0) + ' 个）</div><div class="value green">' + fmt(pkg.remainingValue||0) + ' ' + esc(pkg.unit||'credits') + '</div></div>' +
+    '<div class="stat-card"><div class="label">组织共享包余量（可用 ' + (pkg.totalCount||0) + ' 个）</div><div class="value green">' + fmt(pkg.remainingValue||0) + ' ' + esc(pkg.unit||'credits') + '</div></div>' +
     '<div class="stat-card"><div class="label">共享包初始总额度</div><div class="value">' + fmt(pkg.limitValue||0) + '</div></div>' +
     '<div class="stat-card"><div class="label">共享包已用（' + pct.toFixed(1) + '%）</div><div class="value ' + (pct >= 80 ? 'danger' : '') + '">' + fmt(pkg.usedValue||0) + '</div>' +
     '<div class="bar-wrap" style="margin-top:6px"><div class="bar-fill ' + bc + '" style="width:' + Math.min(pct,100) + '%"></div></div></div>' +

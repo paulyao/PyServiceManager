@@ -458,16 +458,17 @@ def run(config, modules):
             next_token = data.get("nextToken", "")
             if not next_token:
                 break
-        active = [p for p in packages if p.get("status") == "active"]
+        available = [p for p in packages
+                     if p.get("status") == "active" and p.get("remainingValue", 0) > 0]
         summary = {
-            "totalCount": len(active),
-            "limitValue": sum(p.get("limitValue", 0) for p in active),
-            "usedValue": sum(p.get("usedValue", 0) for p in active),
-            "remainingValue": sum(p.get("remainingValue", 0) for p in active),
-            "unit": active[0].get("unit", "credits") if active else "credits",
-            "expiresAt": max((p.get("expiresAt", "") for p in active), default=""),
+            "totalCount": len(available),
+            "limitValue": sum(p.get("limitValue", 0) for p in available),
+            "usedValue": sum(p.get("usedValue", 0) for p in available),
+            "remainingValue": sum(p.get("remainingValue", 0) for p in available),
+            "unit": available[0].get("unit", "credits") if available else "credits",
+            "expiresAt": max((p.get("expiresAt", "") for p in available), default=""),
         }
-        _log(f"共享资源包(仅active): {o_id} {summary['totalCount']}/{len(packages)} 个, "
+        _log(f"共享资源包(未用完): {o_id} {summary['totalCount']}/{len(packages)} 个, "
              f"剩余 {summary['remainingValue']:.2f} {summary['unit']}")
         return summary
 
