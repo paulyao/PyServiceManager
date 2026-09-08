@@ -406,6 +406,7 @@ def run(config, modules):
             _shared_data["exhausted_count"] = sum(1 for m in qoder_quota_data if m["status"] == "restricted")
             # 从用量表构建差异比对映射
             _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in qoder_quota_data}
+            _shared_data["shared_pkg"] = _fetch_shared_packages(api_base_url, api_key, org_id)
 
         # Qoder CN
         cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
@@ -414,6 +415,7 @@ def run(config, modules):
             with _data_lock:
                 _shared_data["members_cn"] = cn_quota_data
                 _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in cn_quota_data}
+                _shared_data["shared_pkg_cn"] = _fetch_shared_packages(cn_base_url, cn_api_key, cn_org_id)
 
         _log(f"本轮检查完成: Qoder {len(qoder_quota_data)} 个成员, Qoder CN {len(cn_quota_data)} 个成员")
 
@@ -436,6 +438,39 @@ def run(config, modules):
             _log(f"用量数据已写入 {table_name}: {len(rows)} 条记录")
         except Exception as e:
             _log(f"写入 {table_name} 失败: {e}", "WARN")
+
+    def _fetch_shared_packages(base_url, key, o_id):
+        """分页获取组织共享资源包，汇总 active 状态包的额度。"""
+        url = f"{base_url}/v1/organizations/{o_id}/resource-packages"
+        headers = {"Authorization": f"Bearer {key}"}
+        packages = []
+        next_token = ""
+        while True:
+            params = {"maxResults": 100}
+            if next_token:
+                params["nextToken"] = next_token
+            result = http_mod.get(url, params=params, headers=headers)
+            if not result.get("success"):
+                _log(f"获取共享资源包失败: {result.get('error', 'unknown')}", "WARN")
+                break
+            data = result.get("json", {})
+            packages.extend(data.get("resourcePackages", []))
+            next_token = data.get("nextToken", "")
+            if not next_token:
+                break
+        active = [p for p in packages if p.get("status") == "active"]
+        summary = {
+            "totalCount": len(packages),
+            "activeCount": len(active),
+            "limitValue": sum(p.get("limitValue", 0) for p in active),
+            "usedValue": sum(p.get("usedValue", 0) for p in active),
+            "remainingValue": sum(p.get("remainingValue", 0) for p in active),
+            "unit": active[0].get("unit", "credits") if active else "credits",
+            "expiresAt": max((p.get("expiresAt", "") for p in active), default=""),
+        }
+        _log(f"共享资源包: {o_id} 共 {summary['totalCount']} 个, active {summary['activeCount']} 个, "
+             f"剩余 {summary['remainingValue']:.2f} {summary['unit']}")
+        return summary
 
     def _check_org_members(base_url, key, o_id):
         """检查单个组织的成员配额，包括 Plan/资源包/总计/共享包配额。"""
@@ -880,6 +915,8 @@ def run(config, modules):
                     "body": json.dumps({
                         "qoder": {"members": qoder_members},
                         "qoder_cn": {"members": cn_members},
+                        "shared_pkg": snapshot.get("shared_pkg"),
+                        "shared_pkg_cn": snapshot.get("shared_pkg_cn"),
                         "last_updated": snapshot.get("last_updated"),
                     }, ensure_ascii=False)}
 
