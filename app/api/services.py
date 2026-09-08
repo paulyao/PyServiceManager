@@ -101,25 +101,29 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
             if not routes_file.exists():
                 routes_file = DATA_DIR / "modules" / "web-service" / "data" / "routes.json"
 
-        # Parse routes.json and extract service names that have routes
-        services_with_routes = set()
+        # Parse routes.json and extract service names that have registered PAGES (not just APIs)
+        services_with_pages = set()
         if routes_file and routes_file.exists():
             try:
                 routes_data = json.loads(routes_file.read_text(encoding="utf-8"))
-                for path in routes_data.keys():
-                    # Extract service name from path like "/heartbeat/api/status" -> "heartbeat"
-                    parts = path.strip("/").split("/")
-                    if parts and parts[0]:
-                        services_with_routes.add(parts[0])
+                for path, methods in routes_data.items():
+                    # Check if any method has type "page"
+                    for method, info in methods.items():
+                        if isinstance(info, dict) and info.get("type") == "page":
+                            # Extract service name from path like "/heartbeat/" -> "heartbeat"
+                            parts = path.strip("/").split("/")
+                            if parts and parts[0]:
+                                services_with_pages.add(parts[0])
+                            break
             except Exception:
                 # If routes.json is invalid, fall back to showing all enabled services
-                services_with_routes = set(all_enabled)
+                services_with_pages = set(all_enabled)
         else:
             # No routes.json yet, show all enabled services (first-time scenario)
-            services_with_routes = set(all_enabled)
+            services_with_pages = set(all_enabled)
 
-        # Filter: only return services that are both enabled AND have registered routes
-        service_names = [name for name in all_enabled if name in services_with_routes]
+        # Filter: only return services that are both enabled AND have registered pages
+        service_names = [name for name in all_enabled if name in services_with_pages]
 
     return {"services": service_names, "port": port}
 
