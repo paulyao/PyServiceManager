@@ -24,6 +24,7 @@ const routes = {
     'services/:name': renderServiceDetailPage,
     'modules': renderModulesPage,
     'backup': renderBackupPage,
+    'skills': renderSkillsPage,
 };
 
 let currentCleanup = null;
