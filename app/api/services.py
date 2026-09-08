@@ -99,7 +99,10 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
             if svc_routes_file.exists():
                 try:
                     routes_data = json.loads(svc_routes_file.read_text(encoding="utf-8"))
+                    # Only check routes that belong to this service (path starts with /{svc_name})
                     for path, methods in routes_data.items():
+                        if not path.startswith("/" + svc_name):
+                            continue
                         # Check if any method has type "page"
                         for method, info in methods.items():
                             if isinstance(info, dict) and info.get("type") == "page":
