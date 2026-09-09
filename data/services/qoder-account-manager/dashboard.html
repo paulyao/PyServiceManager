@@ -186,6 +186,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div id="usage-sec-qoder">
     <div class="stats" id="usage-stats-qoder"></div>
     <div class="stats" id="shared-pkg-qoder"></div>
+    <div class="stats" id="monthly-usage-qoder"></div>
     <div class="search-row">
       <input class="search-box" id="usage-search" type="text" placeholder="搜索姓名或邮箱...">
     </div>
@@ -211,6 +212,7 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div id="usage-sec-qoder_cn" style="display:none">
     <div class="stats" id="usage-stats-cn"></div>
     <div class="stats" id="shared-pkg-cn"></div>
+    <div class="stats" id="monthly-usage-cn"></div>
     <div class="search-row">
       <input class="search-box" id="usage-search-cn" type="text" placeholder="搜索姓名或邮箱...">
     </div>
@@ -556,6 +558,8 @@ async function fetchUsage() {
     renderUsageStats('qoder_cn', 'usage-stats-cn');
     renderSharedPkg(d.shared_pkg, 'shared-pkg-qoder', 'qoder');
     renderSharedPkg(d.shared_pkg_cn, 'shared-pkg-cn', 'qoder_cn');
+    renderMonthlyUsage('qoder', d.qoder.members, 'monthly-usage-qoder');
+    renderMonthlyUsage('qoder_cn', d.qoder_cn.members, 'monthly-usage-cn');
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
@@ -563,6 +567,17 @@ const SHARED_PKG_BUY_URLS = {
   qoder: 'https://market.aliyun.com/detail/cmgj00073967.html?spm=5176.730005.result.4.1344414aJzR3dn&innerSource=search_Qoder#sku=yuncode6796700001',
   qoder_cn: 'https://qoder.console.aliyun.com/instances/teams/019ecf59-bfc0-7a52-bed8-51e536d5c5e5/summary?regionId=hangzhou-center&edition=qoderwork'
 };
+
+function renderMonthlyUsage(org, members, containerId) {
+  const el = document.getElementById(containerId);
+  if (!members || !members.length) { el.innerHTML = ''; return; }
+  // 简单估算：假设所有成员共享一个重置周期，用当前 totalUsed 作为本月已消耗
+  // 上月总消耗无法从当前快照精确得出，这里用占位显示"待采集"
+  const currentMonthTotal = members.reduce((sum, m) => sum + (m.totalUsed || 0), 0);
+  el.innerHTML =
+    '<div class="stat-card"><div class="label">本月已消耗</div><div class="value">' + fmt(currentMonthTotal) + ' credits</div></div>' +
+    '<div class="stat-card"><div class="label">上月总消耗</div><div class="value">待采集</div></div>';
+}
 
 function renderSharedPkg(pkg, containerId, org) {
   const el = document.getElementById(containerId);
