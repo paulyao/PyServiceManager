@@ -407,6 +407,12 @@ def run(config, modules):
             # 从用量表构建差异比对映射
             _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in qoder_quota_data}
             _shared_data["shared_pkg"] = _fetch_shared_packages(api_base_url, api_key, org_id)
+            try:
+                _shared_data["monthly_usage"] = _fetch_org_monthly_usage(api_base_url, api_key, org_id)
+                _log(f"月度消耗(Qoder): 本月 {_shared_data['monthly_usage']['currentMonth']}, "
+                     f"上月 {_shared_data['monthly_usage']['lastMonth']}")
+            except Exception as e:
+                _log(f"月度消耗采集失败(Qoder): {e}", "WARN")
 
         # Qoder CN
         cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
@@ -416,6 +422,12 @@ def run(config, modules):
                 _shared_data["members_cn"] = cn_quota_data
                 _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in cn_quota_data}
                 _shared_data["shared_pkg_cn"] = _fetch_shared_packages(cn_base_url, cn_api_key, cn_org_id)
+                try:
+                    _shared_data["monthly_usage_cn"] = _fetch_org_monthly_usage(cn_base_url, cn_api_key, cn_org_id)
+                    _log(f"月度消耗(CN): 本月 {_shared_data['monthly_usage_cn']['currentMonth']}, "
+                         f"上月 {_shared_data['monthly_usage_cn']['lastMonth']}")
+                except Exception as e:
+                    _log(f"月度消耗采集失败(CN): {e}", "WARN")
 
         _log(f"本轮检查完成: Qoder {len(qoder_quota_data)} 个成员, Qoder CN {len(cn_quota_data)} 个成员")
 
@@ -471,6 +483,49 @@ def run(config, modules):
         _log(f"共享资源包(未用完): {o_id} {summary['totalCount']}/{len(packages)} 个, "
              f"剩余 {summary['remainingValue']:.2f} {summary['unit']}")
         return summary
+
+    def _fetch_org_monthly_usage(base_url, key, o_id):
+        """通过组织用量事件 API 汇总本月与上月消耗的 credits。"""
+        from datetime import timezone
+        now_utc = datetime.now(timezone.utc)
+        month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_month_start = (month_start - timedelta(days=1)).replace(day=1)
+        current = _sum_org_usage_credits(base_url, key, o_id, month_start, now_utc)
+        last = _sum_org_usage_credits(base_url, key, o_id, last_month_start, month_start)
+        return {"currentMonth": round(current, 2), "lastMonth": round(last, 2)}
+
+    def _sum_org_usage_credits(base_url, key, o_id, start_dt, end_dt):
+        """按 ≤7 天窗口分片分页拉取组织用量事件，累加 credits。"""
+        url = f"{base_url}/v1/organizations/{o_id}/usage-events"
+        headers = {"Authorization": f"Bearer {key}"}
+        total = 0.0
+        win_start = start_dt
+        while win_start < end_dt:
+            win_end = min(win_start + timedelta(days=6), end_dt)
+            next_token = ""
+            pages = 0
+            while pages < 100:
+                params = {
+                    "startDate": win_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "endDate": win_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "maxResults": 100,
+                }
+                if next_token:
+                    params["nextToken"] = next_token
+                result = http_mod.get(url, params=params, headers=headers)
+                if not result.get("success"):
+                    _log(f"获取组织用量事件失败: {result.get('error', 'unknown')}", "WARN")
+                    break
+                data = result.get("json", {})
+                total += sum(u.get("credits", 0) or 0 for u in data.get("usages", []))
+                next_token = data.get("nextToken", "")
+                pages += 1
+                if not next_token:
+                    break
+                time.sleep(rate_limit_delay)
+            win_start = win_end
+            time.sleep(rate_limit_delay)
+        return total
 
     def _check_org_members(base_url, key, o_id):
         """检查单个组织的成员配额，包括 Plan/资源包/总计/共享包配额。"""
@@ -917,6 +972,8 @@ def run(config, modules):
                         "qoder_cn": {"members": cn_members},
                         "shared_pkg": snapshot.get("shared_pkg"),
                         "shared_pkg_cn": snapshot.get("shared_pkg_cn"),
+                        "monthly_usage": snapshot.get("monthly_usage"),
+                        "monthly_usage_cn": snapshot.get("monthly_usage_cn"),
                         "last_updated": snapshot.get("last_updated"),
                     }, ensure_ascii=False)}
 

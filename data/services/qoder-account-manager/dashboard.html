@@ -558,8 +558,8 @@ async function fetchUsage() {
     renderUsageStats('qoder_cn', 'usage-stats-cn');
     renderSharedPkg(d.shared_pkg, 'shared-pkg-qoder', 'qoder');
     renderSharedPkg(d.shared_pkg_cn, 'shared-pkg-cn', 'qoder_cn');
-    renderMonthlyUsage('qoder', d.qoder.members, 'monthly-usage-qoder');
-    renderMonthlyUsage('qoder_cn', d.qoder_cn.members, 'monthly-usage-cn');
+    renderMonthlyUsage(d.monthly_usage, 'monthly-usage-qoder');
+    renderMonthlyUsage(d.monthly_usage_cn, 'monthly-usage-cn');
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
@@ -568,15 +568,12 @@ const SHARED_PKG_BUY_URLS = {
   qoder_cn: 'https://qoder.console.aliyun.com/instances/teams/019ecf59-bfc0-7a52-bed8-51e536d5c5e5/summary?regionId=hangzhou-center&edition=qoderwork'
 };
 
-function renderMonthlyUsage(org, members, containerId) {
+function renderMonthlyUsage(monthly, containerId) {
   const el = document.getElementById(containerId);
-  if (!members || !members.length) { el.innerHTML = ''; return; }
-  // 简单估算：假设所有成员共享一个重置周期，用当前 totalUsed 作为本月已消耗
-  // 上月总消耗无法从当前快照精确得出，这里用占位显示"待采集"
-  const currentMonthTotal = members.reduce((sum, m) => sum + (m.totalUsed || 0), 0);
+  if (!monthly) { el.innerHTML = ''; return; }
   el.innerHTML =
-    '<div class="stat-card"><div class="label">本月已消耗</div><div class="value">' + fmt(currentMonthTotal) + ' credits</div></div>' +
-    '<div class="stat-card"><div class="label">上月总消耗</div><div class="value">待采集</div></div>';
+    '<div class="stat-card"><div class="label">上月总消耗</div><div class="value">' + fmt(monthly.lastMonth||0) + ' credits</div></div>' +
+    '<div class="stat-card"><div class="label">本月已消耗</div><div class="value green">' + fmt(monthly.currentMonth||0) + ' credits</div></div>';
 }
 
 function renderSharedPkg(pkg, containerId, org) {
