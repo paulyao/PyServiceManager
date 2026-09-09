@@ -400,9 +400,16 @@ def run(config, modules):
         _log("开始检查成员用量")
         collected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Qoder 国际版
+        # Qoder 国际版（API 调用一律在锁外执行，避免阻塞 Web 请求读取共享数据）
         qoder_quota_data = _check_org_members(api_base_url, api_key, org_id)
         _save_quota_to_sqlite("quota_members", qoder_quota_data, collected_at)
+        shared_pkg = _fetch_shared_packages(api_base_url, api_key, org_id)
+        try:
+            monthly_usage = _fetch_org_monthly_usage("monthly_usage", api_base_url, api_key, org_id)
+            _log(f"上月总消耗(Qoder): {monthly_usage['lastMonth']}")
+        except Exception as e:
+            _log(f"上月总消耗采集失败(Qoder): {e}", "WARN")
+            monthly_usage = _shared_data.get("monthly_usage")
         with _data_lock:
             _shared_data["members"] = qoder_quota_data
             _shared_data["last_updated"] = collected_at
@@ -410,26 +417,27 @@ def run(config, modules):
             _shared_data["exhausted_count"] = sum(1 for m in qoder_quota_data if m["status"] == "restricted")
             # 从用量表构建差异比对映射
             _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in qoder_quota_data}
-            _shared_data["shared_pkg"] = _fetch_shared_packages(api_base_url, api_key, org_id)
-            try:
-                _shared_data["monthly_usage"] = _fetch_org_monthly_usage("monthly_usage", api_base_url, api_key, org_id)
-                _log(f"上月总消耗(Qoder): {_shared_data['monthly_usage']['lastMonth']}")
-            except Exception as e:
-                _log(f"上月总消耗采集失败(Qoder): {e}", "WARN")
+            _shared_data["shared_pkg"] = shared_pkg
+            if monthly_usage:
+                _shared_data["monthly_usage"] = monthly_usage
 
         # Qoder CN
         cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
         if cn_quota_data:
             _save_quota_to_sqlite("quota_members_cn", cn_quota_data, collected_at)
+            shared_pkg_cn = _fetch_shared_packages(cn_base_url, cn_api_key, cn_org_id)
+            try:
+                monthly_usage_cn = _fetch_org_monthly_usage("monthly_usage_cn", cn_base_url, cn_api_key, cn_org_id)
+                _log(f"上月总消耗(CN): {monthly_usage_cn['lastMonth']}")
+            except Exception as e:
+                _log(f"上月总消耗采集失败(CN): {e}", "WARN")
+                monthly_usage_cn = _shared_data.get("monthly_usage_cn")
             with _data_lock:
                 _shared_data["members_cn"] = cn_quota_data
                 _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in cn_quota_data}
-                _shared_data["shared_pkg_cn"] = _fetch_shared_packages(cn_base_url, cn_api_key, cn_org_id)
-                try:
-                    _shared_data["monthly_usage_cn"] = _fetch_org_monthly_usage("monthly_usage_cn", cn_base_url, cn_api_key, cn_org_id)
-                    _log(f"上月总消耗(CN): {_shared_data['monthly_usage_cn']['lastMonth']}")
-                except Exception as e:
-                    _log(f"上月总消耗采集失败(CN): {e}", "WARN")
+                _shared_data["shared_pkg_cn"] = shared_pkg_cn
+                if monthly_usage_cn:
+                    _shared_data["monthly_usage_cn"] = monthly_usage_cn
 
         _log(f"本轮检查完成: Qoder {len(qoder_quota_data)} 个成员, Qoder CN {len(cn_quota_data)} 个成员")
 
