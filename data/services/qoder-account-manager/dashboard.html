@@ -186,7 +186,6 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div id="usage-sec-qoder">
     <div class="stats" id="usage-stats-qoder"></div>
     <div class="stats" id="shared-pkg-qoder"></div>
-    <div class="stats" id="monthly-usage-qoder"></div>
     <div class="search-row">
       <input class="search-box" id="usage-search" type="text" placeholder="搜索姓名或邮箱...">
     </div>
@@ -212,7 +211,6 @@ th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--blue); }
     <div id="usage-sec-qoder_cn" style="display:none">
     <div class="stats" id="usage-stats-cn"></div>
     <div class="stats" id="shared-pkg-cn"></div>
-    <div class="stats" id="monthly-usage-cn"></div>
     <div class="search-row">
       <input class="search-box" id="usage-search-cn" type="text" placeholder="搜索姓名或邮箱...">
     </div>
@@ -558,8 +556,6 @@ async function fetchUsage() {
     renderUsageStats('qoder_cn', 'usage-stats-cn');
     renderSharedPkg(d.shared_pkg, 'shared-pkg-qoder', 'qoder');
     renderSharedPkg(d.shared_pkg_cn, 'shared-pkg-cn', 'qoder_cn');
-    renderMonthlyUsage(d.monthly_usage, 'monthly-usage-qoder');
-    renderMonthlyUsage(d.monthly_usage_cn, 'monthly-usage-cn');
   } catch(e) { console.error('usage fetch error:', e); }
 }
 
@@ -567,14 +563,6 @@ const SHARED_PKG_BUY_URLS = {
   qoder: 'https://market.aliyun.com/detail/cmgj00073967.html?spm=5176.730005.result.4.1344414aJzR3dn&innerSource=search_Qoder#sku=yuncode6796700001',
   qoder_cn: 'https://qoder.console.aliyun.com/instances/teams/019ecf59-bfc0-7a52-bed8-51e536d5c5e5/summary?regionId=hangzhou-center&edition=qoderwork'
 };
-
-function renderMonthlyUsage(monthly, containerId) {
-  const el = document.getElementById(containerId);
-  if (!monthly) { el.innerHTML = ''; return; }
-  el.innerHTML =
-    '<div class="stat-card"><div class="label">上月总消耗</div><div class="value">' + fmt(monthly.lastMonth||0) + ' credits</div></div>' +
-    '<div class="stat-card"><div class="label">本月已消耗</div><div class="value green">' + fmt(monthly.currentMonth||0) + ' credits</div></div>';
-}
 
 function renderSharedPkg(pkg, containerId, org) {
   const el = document.getElementById(containerId);
@@ -615,11 +603,15 @@ function renderUsageStats(org, statsId) {
   const exhausted = members.filter(m => m.totalLimit > 0 && m.usageRate >= 100).length;
   const lowUsage = members.filter(m => m.totalLimit > 0 && m.usageRate < 50).length;
   const unused = members.filter(m => m.totalUsed === 0).length;
+  const monthly = usageData ? usageData[org === 'qoder' ? 'monthly_usage' : 'monthly_usage_cn'] : null;
+  const lastMonthCredits = monthly ? (monthly.lastMonth || 0) : 0;
   document.getElementById(statsId).innerHTML =
     '<div class="stat-card"><div class="label">总成员</div><div class="value">' + totalMembers + ' 人</div></div>' +
     '<div class="stat-card"><div class="label">额度耗尽</div><div class="value danger">' + exhausted + ' 人</div></div>' +
     '<div class="stat-card"><div class="label">用量&lt;50%</div><div class="value green">' + lowUsage + ' 人</div></div>' +
-    '<div class="stat-card"><div class="label">未使用</div><div class="value muted">' + unused + ' 人</div></div>';
+    '<div class="stat-card"><div class="label">未使用</div><div class="value muted">' + unused + ' 人</div></div>' +
+    '<div class="stat-card"><div class="label">本月已消耗credits</div><div class="value">' + fmt(members.reduce((s, m) => s + m.totalUsed, 0)) + '</div></div>' +
+    '<div class="stat-card"><div class="label">上月总消耗credits</div><div class="value">' + fmt(lastMonthCredits) + '</div></div>';
 }
 
 function renderUsageOrg(org, tbodyId) {

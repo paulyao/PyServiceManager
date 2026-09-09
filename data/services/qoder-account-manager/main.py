@@ -176,6 +176,10 @@ def run(config, modules):
                         sql=f"UPDATE {_tbl} SET role = '营销' WHERE role IS NULL OR role = '' OR role = '开发'", commit=True)
             except Exception as e:
                 _log(f"{_tbl} role 列迁移失败: {e}", "WARN")
+        sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS monthly_usage (
+            month TEXT PRIMARY KEY, credits REAL, collected_at TEXT)""", commit=True)
+        sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS monthly_usage_cn (
+            month TEXT PRIMARY KEY, credits REAL, collected_at TEXT)""", commit=True)
         sqlite_mod.execute(db_path=_DB_FILE, sql="""CREATE TABLE IF NOT EXISTS ai_code_ranking (
             user_id TEXT, email TEXT, display_name TEXT,
             total_lines_added INTEGER, ai_lines_added INTEGER,
@@ -408,11 +412,10 @@ def run(config, modules):
             _shared_data["api_members"] = {m.get("email", ""): m.get("name", "") for m in qoder_quota_data}
             _shared_data["shared_pkg"] = _fetch_shared_packages(api_base_url, api_key, org_id)
             try:
-                _shared_data["monthly_usage"] = _fetch_org_monthly_usage(api_base_url, api_key, org_id)
-                _log(f"月度消耗(Qoder): 本月 {_shared_data['monthly_usage']['currentMonth']}, "
-                     f"上月 {_shared_data['monthly_usage']['lastMonth']}")
+                _shared_data["monthly_usage"] = _fetch_org_monthly_usage("monthly_usage", api_base_url, api_key, org_id)
+                _log(f"上月总消耗(Qoder): {_shared_data['monthly_usage']['lastMonth']}")
             except Exception as e:
-                _log(f"月度消耗采集失败(Qoder): {e}", "WARN")
+                _log(f"上月总消耗采集失败(Qoder): {e}", "WARN")
 
         # Qoder CN
         cn_quota_data = _check_org_members(cn_base_url, cn_api_key, cn_org_id) if cn_api_key and cn_org_id else []
@@ -423,11 +426,10 @@ def run(config, modules):
                 _shared_data["api_members_cn"] = {m.get("email", ""): m.get("name", "") for m in cn_quota_data}
                 _shared_data["shared_pkg_cn"] = _fetch_shared_packages(cn_base_url, cn_api_key, cn_org_id)
                 try:
-                    _shared_data["monthly_usage_cn"] = _fetch_org_monthly_usage(cn_base_url, cn_api_key, cn_org_id)
-                    _log(f"月度消耗(CN): 本月 {_shared_data['monthly_usage_cn']['currentMonth']}, "
-                         f"上月 {_shared_data['monthly_usage_cn']['lastMonth']}")
+                    _shared_data["monthly_usage_cn"] = _fetch_org_monthly_usage("monthly_usage_cn", cn_base_url, cn_api_key, cn_org_id)
+                    _log(f"上月总消耗(CN): {_shared_data['monthly_usage_cn']['lastMonth']}")
                 except Exception as e:
-                    _log(f"月度消耗采集失败(CN): {e}", "WARN")
+                    _log(f"上月总消耗采集失败(CN): {e}", "WARN")
 
         _log(f"本轮检查完成: Qoder {len(qoder_quota_data)} 个成员, Qoder CN {len(cn_quota_data)} 个成员")
 
@@ -484,15 +486,30 @@ def run(config, modules):
              f"剩余 {summary['remainingValue']:.2f} {summary['unit']}")
         return summary
 
-    def _fetch_org_monthly_usage(base_url, key, o_id):
-        """通过组织用量事件 API 汇总本月与上月消耗的 credits。"""
+    def _fetch_org_monthly_usage(table_name, base_url, key, o_id):
+        """获取上月总消耗：每月只调一次 API，结果写入 SQLite 后复用。"""
         from datetime import timezone
         now_utc = datetime.now(timezone.utc)
+        # "上月"按当前月份标识：2026-09 期间记录的是 2026-08 的总消耗
+        month_key = now_utc.strftime("%Y-%m")
+        try:
+            row = sqlite_mod.query_one(db_path=_DB_FILE,
+                sql=f"SELECT credits FROM {table_name} WHERE month = ?", params=(month_key,))
+            if row.get("data", {}).get("row"):
+                return {"lastMonth": row["data"]["row"]["credits"]}
+        except Exception as e:
+            _log(f"查询 {table_name} 失败: {e}", "WARN")
         month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         last_month_start = (month_start - timedelta(days=1)).replace(day=1)
-        current = _sum_org_usage_credits(base_url, key, o_id, month_start, now_utc)
         last = _sum_org_usage_credits(base_url, key, o_id, last_month_start, month_start)
-        return {"currentMonth": round(current, 2), "lastMonth": round(last, 2)}
+        try:
+            sqlite_mod.execute(db_path=_DB_FILE,
+                sql=f"INSERT OR REPLACE INTO {table_name} (month, credits, collected_at) VALUES (?, ?, ?)",
+                params=(month_key, round(last, 2),
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")), commit=True)
+        except Exception as e:
+            _log(f"写入 {table_name} 失败: {e}", "WARN")
+        return {"lastMonth": round(last, 2)}
 
     def _sum_org_usage_credits(base_url, key, o_id, start_dt, end_dt):
         """按 ≤7 天窗口分片分页拉取组织用量事件，累加 credits。"""
@@ -713,6 +730,19 @@ def run(config, modules):
             _log(f"已恢复 AI 代码统计时间戳: {_shared_data['ai_code_last_updated']}")
     except Exception as e:
         _log(f"恢复 AI 代码统计时间戳失败: {e}", "WARN")
+
+    # 恢复当月已落库的上月总消耗
+    _month_key = datetime.now().strftime("%Y-%m")
+    for _tbl, _key in (("monthly_usage", "monthly_usage"), ("monthly_usage_cn", "monthly_usage_cn")):
+        try:
+            _row = sqlite_mod.query_one(db_path=_DB_FILE,
+                sql=f"SELECT credits FROM {_tbl} WHERE month = ?", params=(_month_key,))
+            if _row.get("data", {}).get("row"):
+                with _data_lock:
+                    _shared_data[_key] = {"lastMonth": _row["data"]["row"]["credits"]}
+                _log(f"已恢复上月总消耗({_tbl}): {_row['data']['row']['credits']}")
+        except Exception as e:
+            _log(f"恢复 {_tbl} 失败: {e}", "WARN")
 
     # ── 注册 Web 路由 ──
     _log("Qoder 账号管理服务启动")
