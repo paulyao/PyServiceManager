@@ -1,7 +1,9 @@
 """Service management API routes."""
+import asyncio
 import tomllib
 from datetime import datetime
 from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +47,7 @@ async def create_service(data: ServiceCreate, session: AsyncSession = Depends(ge
             code=data.code,
             python_path=data.python_path,
             auto_restart=data.auto_restart,
+            requirements=data.requirements,
         )
         return service
     except ServiceManagerError as e:
@@ -62,7 +65,6 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
 
     port = 8910  # default
     service_names = []
-    routes_file = None
 
     if module:
         # Read port from module config.toml
@@ -75,7 +77,8 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
 
         if config_path.exists():
             try:
-                config_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+                config_text = await asyncio.to_thread(config_path.read_text, "utf-8")
+                config_data = tomllib.loads(config_text)
                 port = config_data.get("server", {}).get("port", 8910)
             except Exception:
                 pass
@@ -91,33 +94,27 @@ async def get_web_enabled_services(session: AsyncSession = Depends(get_session))
         )
         all_enabled = [r[0] for r in sm_result.all()]
 
-        # Check each enabled service for registered pages in their own .web-service/routes.json
+        # Shared routes.json (data/web-service/routes.json) — one read replaces
+        # per-service reads of private routes.json files.
         services_with_pages = set()
-        for svc_name in all_enabled:
-            # Each service stores its routes in data/services/{name}/.web-service/routes.json
-            svc_routes_file = SERVICES_DIR / svc_name / ".web-service" / "routes.json"
-            if svc_routes_file.exists():
-                try:
-                    routes_data = json.loads(svc_routes_file.read_text(encoding="utf-8"))
-                    # Only check routes that belong to this service (path starts with /{svc_name})
-                    for path, methods in routes_data.items():
-                        if not path.startswith("/" + svc_name):
-                            continue
-                        # Check if any method has type "page"
-                        for method, info in methods.items():
-                            if isinstance(info, dict) and info.get("type") == "page":
-                                services_with_pages.add(svc_name)
-                                break
-                        if svc_name in services_with_pages:
+        shared_routes_file = DATA_DIR / "web-service" / "routes.json"
+        if shared_routes_file.exists():
+            try:
+                routes_text = await asyncio.to_thread(shared_routes_file.read_text, "utf-8")
+                routes_data = json.loads(routes_text)
+                for path, methods in routes_data.items():
+                    for method, info in methods.items():
+                        if isinstance(info, dict) and info.get("type") == "page":
+                            # Route "/<svc>/..." → service name is first segment
+                            prefix = path.lstrip("/").split("/", 1)[0]
+                            if prefix:
+                                services_with_pages.add(prefix)
                             break
-                except Exception:
-                    # If routes.json is invalid, include the service (fallback)
-                    services_with_pages.add(svc_name)
-            else:
-                # No routes.json yet, include the service (first-time scenario)
-                services_with_pages.add(svc_name)
+            except Exception:
+                # Invalid shared routes.json — no services to report
+                pass
 
-        # Filter: only return services that are both enabled AND have registered pages
+        # Filter: only return enabled services having at least one registered page
         service_names = [name for name in all_enabled if name in services_with_pages]
 
     return {"services": service_names, "port": port}
@@ -283,13 +280,12 @@ async def update_service_code(name: str, data: CodeUpdate, session: AsyncSession
 
 @router.post("/{name}/upload")
 async def upload_service_script(name: str, file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
-    if not file.filename.endswith(".py"):
+    if not file.filename or not file.filename.endswith(".py"):
         raise HTTPException(status_code=400, detail="Only .py files are allowed")
 
     content = (await file.read()).decode("utf-8")
     try:
         service = await service_manager.update_code(session, name, content)
-        return {"message": "Script uploaded", "filename": file.filename}
     except ServiceNotFoundError:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     except ServiceManagerError as e:
@@ -323,12 +319,17 @@ async def _get_service_deps_data(name: str, session: AsyncSession, scan: bool = 
     )
     bindings = bindings_result.scalars().all()
 
+    mods = {}
+    if bindings:
+        ids = [b.module_id for b in bindings]
+        mods = {m.id: m for m in (await session.execute(
+            select(Module).where(Module.id.in_(ids)))).scalars()}
+
     module_deps: list[ModuleDepSource] = []
     all_specs: list[str] = list(svc_reqs)
 
     for binding in bindings:
-        mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
-        mod = mod_result.scalar_one_or_none()
+        mod = mods.get(binding.module_id)
         if mod and mod.requirements_list:
             mod_reqs = mod.requirements_list
             mod_check = check_requirements(mod_reqs)
@@ -370,8 +371,7 @@ async def _get_service_deps_data(name: str, session: AsyncSession, scan: bool = 
         all_scanned_packages: list[str] = list(svc_scan_result.third_party_packages)
 
         for binding in bindings:
-            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
-            mod = mod_result.scalar_one_or_none()
+            mod = mods.get(binding.module_id)
             if mod and mod.script_path:
                 from app.core.module_manager import ModuleManager
                 mod_path = ModuleManager._resolve_path(mod.script_path)
@@ -434,11 +434,12 @@ async def install_service_deps(name: str, session: AsyncSession = Depends(get_se
     )
     bindings = bindings_result.scalars().all()
 
-    for binding in bindings:
-        mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
-        mod = mod_result.scalar_one_or_none()
-        if mod and mod.requirements_list:
-            all_specs.extend(mod.requirements_list)
+    if bindings:
+        ids = [b.module_id for b in bindings]
+        for m in (await session.execute(
+            select(Module).where(Module.id.in_(ids)))).scalars():
+            if m.requirements_list:
+                all_specs.extend(m.requirements_list)
 
     install_result = await install_requirements(all_specs)
     return DepsInstallResponse(

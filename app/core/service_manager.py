@@ -117,23 +117,28 @@ class SystemdBackend(ServiceBackend):
             raise ServiceCommandError(f"Failed to disable {service.name}", result.stderr)
 
     async def get_status(self, service: Service) -> dict:
-        active_result = await systemctl("is-active", service.name)
-        enabled_result = await systemctl("is-enabled", service.name)
+        # Single systemctl call (3 serial subprocesses → 1)
         show_result = await run_command(
-            ["systemctl", "show", f"{service.name}.service", "--property=MainPID"],
+            ["systemctl", "show", f"{service.name}.service",
+             "--property=ActiveState,UnitFileState,MainPID"],
         )
+        props = {}
+        if show_result.ok:
+            for line in show_result.stdout.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    props[k] = v
+
         pid = None
-        if show_result.ok and "MainPID=" in show_result.stdout:
-            try:
-                pid = int(show_result.stdout.split("MainPID=")[1].strip())
-                if pid == 0:
-                    pid = None
-            except (ValueError, IndexError):
-                pass
+        try:
+            pid_val = int(props.get("MainPID", "0"))
+            pid = pid_val if pid_val != 0 else None
+        except ValueError:
+            pass
 
         return {
-            "active": active_result.stdout if active_result.returncode == 0 else "inactive",
-            "enabled": enabled_result.stdout == "enabled",
+            "active": props.get("ActiveState", "inactive") if show_result.ok else "inactive",
+            "enabled": props.get("UnitFileState") == "enabled",
             "pid": pid,
         }
 
@@ -208,8 +213,8 @@ class ProcessBackend(ServiceBackend):
 
         log_file = open(self._log_path(service), "a")
         try:
-            proc = subprocess.Popen(
-                [python_path, "-u", str(self._runner_path(service))],
+            proc = await asyncio.create_subprocess_exec(
+                python_path, "-u", str(self._runner_path(service)),
                 stdout=log_file,
                 stderr=log_file,
                 cwd=service.working_dir,
@@ -295,10 +300,6 @@ class ServiceManager:
         """Resolve python_path to an actual executable."""
         if python_path == "auto" or not python_path:
             return DEFAULT_PYTHON_PATH
-        # Validate that the explicitly provided path exists
-        if not Path(python_path).exists():
-            raise ServiceManagerError(f"Python interpreter not found: {python_path}")
-        return python_path
 
     async def create(
         self,
@@ -310,6 +311,7 @@ class ServiceManager:
         code: str | None = None,
         python_path: str = "auto",
         auto_restart: bool = True,
+        requirements: list[str] | None = None,
     ) -> Service:
         """Create a new service with all required files."""
         validate_service_name(name)
@@ -331,18 +333,19 @@ class ServiceManager:
         if errors:
             raise ServiceManagerError("Invalid Python code", "; ".join(errors))
 
-        # Create service directory
+        # Create service directory and write files
+        def _write_service_files() -> tuple[Path, Path]:
+            service_dir = SERVICES_DIR / name
+            service_dir.mkdir(parents=True, exist_ok=True)
+            main_path = service_dir / "main.py"
+            main_path.write_text(code, encoding="utf-8")
+            config_path = service_dir / "config.toml"
+            default_config = f"# Configuration for service: {name}\n[interval]\nseconds = 5\n\n[message]\ntext = \"Hello from {name}\"\n"
+            config_path.write_text(default_config, encoding="utf-8")
+            return main_path, config_path
+
+        main_path, config_path = await asyncio.to_thread(_write_service_files)
         service_dir = SERVICES_DIR / name
-        service_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write main.py
-        main_path = service_dir / "main.py"
-        main_path.write_text(code, encoding="utf-8")
-
-        # Write default config.toml
-        config_path = service_dir / "config.toml"
-        default_config = f"# Configuration for service: {name}\n[interval]\nseconds = 5\n\n[message]\ntext = \"Hello from {name}\"\n"
-        config_path.write_text(default_config, encoding="utf-8")
 
         # Generate runner.py
         from app.core.runner_template import generate_runner
@@ -367,6 +370,7 @@ class ServiceManager:
             python_path=resolved_python,
             working_dir=str(service_dir),
         )
+        service.requirements_list = requirements or []
         session.add(service)
         try:
             await session.commit()
@@ -400,11 +404,10 @@ class ServiceManager:
             await self._backend.uninstall_unit(service)
         except Exception:
             pass
-
         # Remove service directory
         service_dir = SERVICES_DIR / name
         if service_dir.exists():
-            shutil.rmtree(service_dir)
+            await asyncio.to_thread(shutil.rmtree, service_dir)
 
         # Explicitly remove module bindings first (do not rely on DB cascade alone)
         await session.execute(delete(ServiceModule).where(ServiceModule.service_id == service.id))
@@ -462,11 +465,12 @@ class ServiceManager:
             )
         )
         bindings = bindings_result.scalars().all()
-        for binding in bindings:
-            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
-            mod = mod_result.scalar_one_or_none()
-            if mod and mod.requirements_list:
-                all_specs.extend(mod.requirements_list)
+        if bindings:
+            ids = [b.module_id for b in bindings]
+            for m in (await session.execute(
+                select(Module).where(Module.id.in_(ids)))).scalars():
+                if m.requirements_list:
+                    all_specs.extend(m.requirements_list)
         if all_specs:
             deps_check = check_requirements(all_specs)
             if not deps_check.all_satisfied:
@@ -545,21 +549,24 @@ class ServiceManager:
         return await self._backend.get_status(service)
 
     async def sync_all_status(self, session: AsyncSession) -> None:
-        """Sync all services' status from the backend."""
+        """Sync all services' status from the backend (concurrently)."""
         result = await session.execute(select(Service))
         services = result.scalars().all()
-        for svc in services:
-            try:
-                status = await self._backend.get_status(svc)
-                new_status = "running" if status["active"] in ("active", "running") else "stopped"
-                svc.status = new_status
-            except Exception:
-                svc.status = "unknown"
+        await asyncio.gather(*(self._sync_one(svc) for svc in services))
         try:
             await session.commit()
         except Exception as e:
             await session.rollback()
             raise ServiceManagerError(f"Database error while syncing service status: {e}")
+
+    async def _sync_one(self, svc: Service) -> None:
+        """Query one service's live status and assign it (never raises)."""
+        try:
+            status = await self._backend.get_status(svc)
+            new_status = "running" if status["active"] in ("active", "running") else "stopped"
+            svc.status = new_status
+        except Exception:
+            svc.status = "unknown"
 
     async def update_code(self, session: AsyncSession, name: str, code: str) -> Service:
         service = await self._get_service(session, name)
@@ -568,7 +575,7 @@ class ServiceManager:
             raise ServiceManagerError("Invalid Python code", "; ".join(errors))
 
         main_path = SERVICES_DIR / name / "main.py"
-        main_path.write_text(code, encoding="utf-8")
+        await asyncio.to_thread(main_path.write_text, code, "utf-8")
         service.updated_at = datetime.now()
         try:
             await session.commit()
@@ -592,9 +599,7 @@ class ServiceManager:
             raise ServiceManagerError("Invalid TOML config", "; ".join(errors))
 
         config_path = SERVICES_DIR / name / "config.toml"
-        config_path.write_text(config, encoding="utf-8")
-
-        # Signal running service to reload config
+        await asyncio.to_thread(config_path.write_text, config, "utf-8")
         if service.status == "running":
             await self._signal_reload(service)
 
@@ -624,11 +629,16 @@ class ServiceManager:
         )
         bindings = bindings_result.scalars().all()
 
+        mods = {}
+        if bindings:
+            ids = [b.module_id for b in bindings]
+            mods = {m.id: m for m in (await session.execute(
+                select(Module).where(Module.id.in_(ids)))).scalars()}
+
         registry = []
         paths_updated = False
         for binding in bindings:
-            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
-            mod = mod_result.scalar_one_or_none()
+            mod = mods.get(binding.module_id)
             if not mod:
                 continue
 

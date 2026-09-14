@@ -1,8 +1,11 @@
 """Backup & Restore management: create, preview, restore ZIP archives."""
+import asyncio
 import io
 import json
 import logging
+import os
 import socket
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -126,161 +129,205 @@ class BackupManager:
         module_names: list[str] | None,
         service_names: list[str] | None,
         include_bindings: bool = True,
-    ) -> tuple[io.BytesIO, str]:
-        """Create a ZIP backup archive. Returns (zip_buffer, filename)."""
+    ) -> tuple[Path, str]:
+        """Create a ZIP backup archive. Returns (temp file path, filename).
+
+        Heavy I/O (file reads + deflate compression) runs in a worker thread
+        via _write_zip so the event loop is not blocked."""
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         filename = f"pyservice-backup-{timestamp}.zip"
 
-        buffer = io.BytesIO()
+        # ── Async phase: DB queries + build file plan ──
         manifest_modules: list[ManifestModule] = []
         manifest_services: list[ManifestService] = []
+        # entries: (zip path, disk path, "text" | "bytes")
+        entries: list[tuple[str, Path, str]] = []
+        # direct values: (zip path, bytes) for in-memory content
+        direct: list[tuple[str, bytes]] = []
 
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            # ── Backup Modules ──
-            mod_query = select(Module).where(Module.is_builtin == False).order_by(Module.name)  # noqa: E712
-            if module_names is not None and len(module_names) > 0:
-                mod_query = mod_query.where(Module.name.in_(module_names))
+        mod_query = select(Module).where(Module.is_builtin == False).order_by(Module.name)  # noqa: E712
+        if module_names is not None and len(module_names) > 0:
+            mod_query = mod_query.where(Module.name.in_(module_names))
 
-            mod_result = await session.execute(mod_query)
-            modules = mod_result.scalars().all()
+        mod_result = await session.execute(mod_query)
+        modules = mod_result.scalars().all()
 
-            for mod in modules:
-                mod_prefix = f"modules/{mod.name}"
-                script_path = self._resolve_path(mod.script_path)
+        for mod in modules:
+            mod_prefix = f"modules/{mod.name}"
+            script_path = self._resolve_path(mod.script_path)
 
-                # Write module.py
-                if script_path.exists():
-                    zf.writestr(f"{mod_prefix}/module.py", script_path.read_text(encoding="utf-8"))
-                else:
-                    logger.warning("Module '%s' script_path not found: %s", mod.name, script_path)
+            # Write module.py
+            if script_path.exists():
+                entries.append((f"{mod_prefix}/module.py", script_path, "text"))
+            else:
+                logger.warning("Module '%s' script_path not found: %s", mod.name, script_path)
 
-                # Write config.toml if exists
-                has_config = False
-                if mod.config_path:
-                    config_path = self._resolve_path(mod.config_path)
-                    if config_path.exists():
-                        zf.writestr(f"{mod_prefix}/config.toml", config_path.read_text(encoding="utf-8"))
-                        has_config = True
-
-                # Write auxiliary files (e.g. daemon scripts) under files/
-                mod_extra_files: list[str] = []
-                module_dir = script_path.parent
-                for extra in self._collect_extra_files(module_dir, _MODULE_EXCLUDE, {"module.py", "config.toml"}):
-                    rel = extra.relative_to(module_dir).as_posix()
-                    zf.writestr(f"{mod_prefix}/files/{rel}", extra.read_bytes())
-                    mod_extra_files.append(rel)
-
-                # Write meta.json
-                meta = {
-                    "name": mod.name,
-                    "display_name": mod.display_name,
-                    "description": mod.description,
-                    "version": mod.version,
-                    "author": mod.author,
-                    "code_source": mod.code_source,
-                    "requirements": mod.requirements_list,
-                    "extra_files": mod_extra_files,
-                }
-                zf.writestr(f"{mod_prefix}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
-
-                manifest_modules.append(ManifestModule(
-                    name=mod.name,
-                    display_name=mod.display_name,
-                    description=mod.description,
-                    version=mod.version,
-                    author=mod.author,
-                    code_source=mod.code_source,
-                    requirements=mod.requirements_list,
-                    is_builtin=False,
-                    has_config=has_config,
-                    extra_files=mod_extra_files,
-                ))
-
-            # ── Backup Services ──
-            svc_query = select(Service).order_by(Service.name)
-            if service_names is not None and len(service_names) > 0:
-                svc_query = svc_query.where(Service.name.in_(service_names))
-
-            svc_result = await session.execute(svc_query)
-            services = svc_result.scalars().all()
-
-            for svc in services:
-                svc_prefix = f"services/{svc.name}"
-                service_dir = SERVICES_DIR / svc.name
-
-                # Write main.py
-                main_path = service_dir / "main.py"
-                if main_path.exists():
-                    zf.writestr(f"{svc_prefix}/main.py", main_path.read_text(encoding="utf-8"))
-
-                # Write config.toml
-                config_path = service_dir / "config.toml"
+            # Write config.toml if exists
+            has_config = False
+            if mod.config_path:
+                config_path = self._resolve_path(mod.config_path)
                 if config_path.exists():
-                    zf.writestr(f"{svc_prefix}/config.toml", config_path.read_text(encoding="utf-8"))
+                    entries.append((f"{mod_prefix}/config.toml", config_path, "text"))
+                    has_config = True
 
-                # Write auxiliary files (sqlite db, html pages, extra scripts, etc.) under files/
-                svc_extra_files: list[str] = []
-                for extra in self._collect_extra_files(service_dir, _SERVICE_EXCLUDE, {"main.py", "config.toml"}):
-                    rel = extra.relative_to(service_dir).as_posix()
-                    zf.writestr(f"{svc_prefix}/files/{rel}", extra.read_bytes())
-                    svc_extra_files.append(rel)
+            # Write auxiliary files (e.g. daemon scripts) under files/
+            mod_extra_files: list[str] = []
+            module_dir = script_path.parent
+            for extra in self._collect_extra_files(module_dir, _MODULE_EXCLUDE, {"module.py", "config.toml"}):
+                rel = extra.relative_to(module_dir).as_posix()
+                entries.append((f"{mod_prefix}/files/{rel}", extra, "bytes"))
+                mod_extra_files.append(rel)
 
-                # Collect bindings
-                bindings: list[BindingInfo] = []
-                if include_bindings:
-                    bindings_result = await session.execute(
-                        select(ServiceModule)
-                        .where(ServiceModule.service_id == svc.id)
-                        .order_by(ServiceModule.load_order)
-                    )
-                    for binding in bindings_result.scalars().all():
-                        mod_result2 = await session.execute(select(Module).where(Module.id == binding.module_id))
-                        bound_mod = mod_result2.scalar_one_or_none()
-                        if bound_mod:
-                            bindings.append(BindingInfo(
-                                module_name=bound_mod.name,
-                                enabled=binding.enabled,
-                                load_order=binding.load_order,
-                            ))
+            # Write meta.json
+            meta = {
+                "name": mod.name,
+                "display_name": mod.display_name,
+                "description": mod.description,
+                "version": mod.version,
+                "author": mod.author,
+                "code_source": mod.code_source,
+                "requirements": mod.requirements_list,
+                "extra_files": mod_extra_files,
+            }
+            direct.append((f"{mod_prefix}/meta.json",
+                           json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")))
 
-                # Write meta.json
-                meta = {
-                    "name": svc.name,
-                    "display_name": svc.display_name,
-                    "description": svc.description,
-                    "code_source": svc.code_source,
-                    "auto_restart": svc.auto_restart,
-                    "requirements": svc.requirements_list,
-                    "remarks": svc.remarks,
-                    "bindings": [b.model_dump() for b in bindings],
-                    "extra_files": svc_extra_files,
-                }
-                zf.writestr(f"{svc_prefix}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+            manifest_modules.append(ManifestModule(
+                name=mod.name,
+                display_name=mod.display_name,
+                description=mod.description,
+                version=mod.version,
+                author=mod.author,
+                code_source=mod.code_source,
+                requirements=mod.requirements_list,
+                is_builtin=False,
+                has_config=has_config,
+                extra_files=mod_extra_files,
+            ))
 
-                manifest_services.append(ManifestService(
-                    name=svc.name,
-                    display_name=svc.display_name,
-                    description=svc.description,
-                    code_source=svc.code_source,
-                    auto_restart=svc.auto_restart,
-                    requirements=svc.requirements_list,
-                    remarks=svc.remarks,
-                    bindings=bindings,
-                    extra_files=svc_extra_files,
-                ))
+        svc_query = select(Service).order_by(Service.name)
+        if service_names is not None and len(service_names) > 0:
+            svc_query = svc_query.where(Service.name.in_(service_names))
 
-            # ── Write manifest.json ──
-            manifest = BackupManifest(
-                version=_BACKUP_VERSION,
-                created_at=datetime.now().isoformat(timespec="seconds"),
-                source_host=socket.gethostname(),
-                modules=manifest_modules,
-                services=manifest_services,
+        svc_result = await session.execute(svc_query)
+        services = svc_result.scalars().all()
+
+        # Batch-fetch all bindings for the selected services (N+1 fix)
+        all_bindings = {svc.id: [] for svc in services}
+        if include_bindings and services:
+            bindings_result = await session.execute(
+                select(ServiceModule)
+                .where(ServiceModule.service_id.in_([s.id for s in services]))
+                .order_by(ServiceModule.load_order)
             )
-            zf.writestr("manifest.json", json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2))
+            for sm in bindings_result.scalars().all():
+                all_bindings.setdefault(sm.service_id, []).append(sm)
 
-        buffer.seek(0)
-        return buffer, filename
+        # Batch-fetch bound modules in one query (N+1 fix)
+        bound_mod_ids = {sm.module_id for binds in all_bindings.values() for sm in binds}
+        mods_by_id: dict[int, Module] = {}
+        if bound_mod_ids:
+            mods_result = await session.execute(
+                select(Module).where(Module.id.in_(bound_mod_ids))
+            )
+            mods_by_id = {m.id: m for m in mods_result.scalars().all()}
+
+        for svc in services:
+            svc_prefix = f"services/{svc.name}"
+            service_dir = SERVICES_DIR / svc.name
+
+            # Write main.py
+            main_path = service_dir / "main.py"
+            if main_path.exists():
+                entries.append((f"{svc_prefix}/main.py", main_path, "text"))
+
+            # Write config.toml
+            config_path = service_dir / "config.toml"
+            if config_path.exists():
+                entries.append((f"{svc_prefix}/config.toml", config_path, "text"))
+
+            # Write auxiliary files (sqlite db, html pages, extra scripts, etc.) under files/
+            svc_extra_files: list[str] = []
+            for extra in self._collect_extra_files(service_dir, _SERVICE_EXCLUDE, {"main.py", "config.toml"}):
+                rel = extra.relative_to(service_dir).as_posix()
+                entries.append((f"{svc_prefix}/files/{rel}", extra, "bytes"))
+                svc_extra_files.append(rel)
+
+            # Collect bindings
+            bindings: list[BindingInfo] = []
+            for binding in all_bindings.get(svc.id, []):
+                bound_mod = mods_by_id.get(binding.module_id)
+                if bound_mod:
+                    bindings.append(BindingInfo(
+                        module_name=bound_mod.name,
+                        enabled=binding.enabled,
+                        load_order=binding.load_order,
+                    ))
+
+            # Write meta.json
+            meta = {
+                "name": svc.name,
+                "display_name": svc.display_name,
+                "description": svc.description,
+                "code_source": svc.code_source,
+                "auto_restart": svc.auto_restart,
+                "requirements": svc.requirements_list,
+                "remarks": svc.remarks,
+                "bindings": [b.model_dump() for b in bindings],
+                "extra_files": svc_extra_files,
+            }
+            direct.append((f"{svc_prefix}/meta.json",
+                           json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")))
+
+            manifest_services.append(ManifestService(
+                name=svc.name,
+                display_name=svc.display_name,
+                description=svc.description,
+                code_source=svc.code_source,
+                auto_restart=svc.auto_restart,
+                requirements=svc.requirements_list,
+                remarks=svc.remarks,
+                bindings=bindings,
+                extra_files=svc_extra_files,
+            ))
+
+        # ── Write manifest.json ──
+        manifest = BackupManifest(
+            version=_BACKUP_VERSION,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+            source_host=socket.gethostname(),
+            modules=manifest_modules,
+            services=manifest_services,
+        )
+        direct.append(("manifest.json",
+                       json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2).encode("utf-8")))
+
+        # ── Thread phase: write ZIP to a temp file (no event-loop blocking) ──
+        fd, temp_path = tempfile.mkstemp(prefix="pyservice-backup-", suffix=".zip")
+        os.close(fd)
+        temp_path = Path(temp_path)
+        try:
+            await asyncio.to_thread(self._write_zip, entries, direct, temp_path)
+        except BaseException:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return temp_path, filename
+
+    @staticmethod
+    def _write_zip(
+        entries: list[tuple[str, Path, str]],
+        direct: list[tuple[str, bytes]],
+        temp_path: Path,
+    ) -> None:
+        """Write backup ZIP synchronously (runs in a worker thread)."""
+        with zipfile.ZipFile(temp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for zip_path, disk_path, mode in entries:
+                if mode == "text":
+                    zf.writestr(zip_path, disk_path.read_text(encoding="utf-8"))
+                else:
+                    zf.writestr(zip_path, disk_path.read_bytes())
+            for zip_path, data in direct:
+                zf.writestr(zip_path, data)
 
     async def preview_backup(self, session: AsyncSession, zip_bytes: bytes) -> BackupPreviewResponse:
         """Preview a backup ZIP: parse manifest and detect conflicts."""
@@ -336,8 +383,6 @@ class BackupManager:
                     if binding.module_name not in conflicts.missing_modules:
                         conflicts.missing_modules.append(binding.module_name)
 
-        return BackupPreviewResponse(manifest=manifest, conflicts=conflicts)
-
     async def restore_backup(
         self,
         session: AsyncSession,
@@ -349,11 +394,8 @@ class BackupManager:
         manifest = self._read_manifest(zip_bytes)
         result = RestoreResponse()
 
-        # Read all ZIP entries into memory
-        entries = self._read_zip_entries(zip_bytes)
-        binary_entries = self._read_zip_binary_entries(zip_bytes)
-
-        # ── Phase 1: Restore Modules ──
+        # Read all ZIP entries into memory (single pass, binary-safe)
+        entries = self._read_zip_all(zip_bytes)
         for mod_info in manifest.modules:
             if mod_info.is_builtin:
                 result.warnings.append(f"跳过内置模块 '{mod_info.name}'（目标机器会自动注册）")
@@ -395,9 +437,15 @@ class BackupManager:
 
                 # Read files from ZIP
                 mod_prefix = f"modules/{mod_info.name}"
-                code = entries.get(f"{mod_prefix}/module.py", "")
+                code = entries.get(f"{mod_prefix}/module.py", b"")
+                if isinstance(code, bytes):
+                    code = code.decode("utf-8", errors="replace")
                 config_toml = entries.get(f"{mod_prefix}/config.toml")
-                meta_raw = entries.get(f"{mod_prefix}/meta.json", "{}")
+                if isinstance(config_toml, bytes):
+                    config_toml = config_toml.decode("utf-8", errors="replace")
+                meta_raw = entries.get(f"{mod_prefix}/meta.json", b"{}")
+                if isinstance(meta_raw, bytes):
+                    meta_raw = meta_raw.decode("utf-8", errors="replace")
                 meta = json.loads(meta_raw)
 
                 if not code:
@@ -409,13 +457,12 @@ class BackupManager:
 
                 # Write module.py
                 (module_dir / "module.py").write_text(code, encoding="utf-8")
-
                 # Write config.toml
                 if config_toml is not None:
                     (module_dir / "config.toml").write_text(config_toml, encoding="utf-8")
 
                 # Restore auxiliary files (binary-safe)
-                extra_warnings = self._restore_extra_files(binary_entries, f"{mod_prefix}/files/", module_dir)
+                extra_warnings = self._restore_extra_files(entries, f"{mod_prefix}/files/", module_dir)
                 result.warnings.extend(f"模块 '{effective_name}': {w}" for w in extra_warnings)
 
                 if local_mod and strategy == "overwrite":
@@ -499,9 +546,15 @@ class BackupManager:
 
                 # Read files from ZIP
                 svc_prefix = f"services/{svc_info.name}"
-                code = entries.get(f"{svc_prefix}/main.py", "")
+                code = entries.get(f"{svc_prefix}/main.py", b"")
+                if isinstance(code, bytes):
+                    code = code.decode("utf-8", errors="replace")
                 config = entries.get(f"{svc_prefix}/config.toml")
-                meta_raw = entries.get(f"{svc_prefix}/meta.json", "{}")
+                if isinstance(config, bytes):
+                    config = config.decode("utf-8", errors="replace")
+                meta_raw = entries.get(f"{svc_prefix}/meta.json", b"{}")
+                if isinstance(meta_raw, bytes):
+                    meta_raw = meta_raw.decode("utf-8", errors="replace")
                 meta = json.loads(meta_raw)
 
                 if not code:
@@ -519,7 +572,7 @@ class BackupManager:
                     (service_dir / "config.toml").write_text(config, encoding="utf-8")
 
                 # Restore auxiliary files (sqlite db, html pages, etc., binary-safe)
-                extra_warnings = self._restore_extra_files(binary_entries, f"{svc_prefix}/files/", service_dir)
+                extra_warnings = self._restore_extra_files(entries, f"{svc_prefix}/files/", service_dir)
                 result.warnings.extend(f"服务 '{effective_name}': {w}" for w in extra_warnings)
 
                 # Resolve python_path for this machine
@@ -701,26 +754,9 @@ class BackupManager:
         except Exception as e:
             raise BackupManagerError(f"读取备份文件失败: {str(e)}")
 
-    def _read_zip_entries(self, zip_bytes: bytes) -> dict[str, str]:
-        """Read all text entries from ZIP into a dict. Skips directories and auxiliary files."""
-        entries = {}
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                if not self._validate_zip_path(info.filename):
-                    continue
-                # Auxiliary files may be binary; handled by _read_zip_binary_entries
-                if "/files/" in info.filename:
-                    continue
-                try:
-                    entries[info.filename] = zf.read(info.filename).decode("utf-8")
-                except UnicodeDecodeError:
-                    logger.warning("Skipping non-text entry in backup: %s", info.filename)
-        return entries
-
-    def _read_zip_binary_entries(self, zip_bytes: bytes) -> dict[str, bytes]:
-        """Read auxiliary file entries (under */files/) from ZIP as raw bytes."""
+    def _read_zip_all(self, zip_bytes: bytes) -> dict[str, bytes]:
+        """Read all valid ZIP entries as raw bytes in a single pass.
+        Callers decode text entries on demand (utf-8, errors=replace)."""
         entries: dict[str, bytes] = {}
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             for info in zf.infolist():
@@ -728,8 +764,7 @@ class BackupManager:
                     continue
                 if not self._validate_zip_path(info.filename):
                     continue
-                if "/files/" in info.filename:
-                    entries[info.filename] = zf.read(info.filename)
+                entries[info.filename] = zf.read(info.filename)
         return entries
 
     @staticmethod

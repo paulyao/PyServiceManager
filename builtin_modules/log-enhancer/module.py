@@ -1,11 +1,15 @@
 """Log Enhancer module - enhanced logging with log retention management."""
 
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+
+# 匹配以 "YYYY-MM-DD" 开头的日志行（runner 日志格式）
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 class Module:
     name = "log-enhancer"
@@ -21,6 +25,8 @@ class Module:
         self._stop_flag = threading.Event()
         self._retention_days = self.DEFAULT_RETENTION_DAYS
         self._check_interval = self.DEFAULT_CHECK_INTERVAL
+        self._log_path = None
+        self._logger = None
 
     def on_start(self, ctx):
         """Start the log retention cleanup thread."""
@@ -61,8 +67,14 @@ class Module:
 
     def log(self, message, level="INFO"):
         """Log a message - accessible via modules["log-enhancer"].log()"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{timestamp} [{level}] {message}")
+        if self._logger is not None:
+            # 走服务日志框架（与 runner 的日志格式/落盘一致）
+            log_fn = getattr(self._logger, level.lower(), self._logger.info)
+            log_fn(message)
+        else:
+            # on_start 未执行时的降级路径（直接运行/测试场景）
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"{timestamp} [{level}] {message}")
 
     def _cleanup_loop(self):
         """Background loop that periodically cleans up old log entries."""
@@ -76,7 +88,16 @@ class Module:
             self._run_cleanup()
 
     def _run_cleanup(self):
-        """Remove log entries older than retention_days."""
+        """Remove log entries older than retention_days.
+
+        日志按时间顺序追加：旧行在文件头部，无法用 truncate 去头。
+        采用原子替换：保留内容写入同目录临时文件后 os.replace——
+        - 读取端（log streamer）要么看到完整旧文件、要么完整新文件，
+          永不读到半截内容（原子替换语义）
+        - 追加端（runner）持有旧 inode 继续写，其新行在下次清理周期/
+          服务重启后归位；不会出现撕裂或交错写入
+        无日期前缀的行视为保留（连续行/print 输出）。
+        """
         if not self._log_path or not self._log_path.exists():
             return
 
@@ -84,29 +105,38 @@ class Module:
             cutoff = datetime.now() - timedelta(days=self._retention_days)
             cutoff_str = cutoff.strftime("%Y-%m-%d")
 
-            with open(self._log_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-
-            # Keep lines that are newer than cutoff or don't have a timestamp
-            kept = []
+            # 二进制 + 逐行 readline：字节偏移精确（文本模式 tell() 在
+            # 迭代中禁用且偏移不透明）
+            remove_end = 0
             removed_count = 0
-            for line in lines:
-                # Log lines start with "YYYY-MM-DD HH:MM:SS,..."
-                line_date = line[:10] if len(line) >= 10 else ""
-                if line_date >= cutoff_str:
-                    kept.append(line)
-                elif line_date and line[4] == "-" and line[7] == "-":
-                    # Valid date format and older than cutoff
+            with open(self._log_path, "rb") as f:
+                while True:
+                    raw = f.readline()
+                    if not raw:
+                        break
+                    line = raw.decode("utf-8", errors="replace")
+                    if not _DATE_RE.match(line):
+                        # 无日期前缀：保守保留，停止扫描
+                        break
+                    if line[:10] >= cutoff_str:
+                        # 首个新行：停止扫描
+                        break
+                    remove_end = f.tell()
                     removed_count += 1
-                else:
-                    # No valid date prefix (e.g. continuation line, print output) - keep
-                    kept.append(line)
 
-            if removed_count > 0:
-                with open(self._log_path, "w", encoding="utf-8") as f:
-                    f.writelines(kept)
+            if removed_count > 0 and remove_end > 0:
+                # 保留 remove_end 之后的全部内容，原子替换原文件
+                with open(self._log_path, "rb") as f:
+                    f.seek(remove_end)
+                    kept = f.read()
+                tmp_path = self._log_path.with_name(
+                    self._log_path.name + ".cleanup.tmp")
+                with open(tmp_path, "wb") as out:
+                    out.write(kept)
+                os.replace(tmp_path, self._log_path)
                 self._logger.info(
-                    f"Log cleanup: removed {removed_count} entries older than {self._retention_days} days"
+                    f"Log cleanup: removed {removed_count} entries older than "
+                    f"{self._retention_days} days"
                 )
         except Exception as e:
             self._logger.error(f"Log cleanup error: {e}")

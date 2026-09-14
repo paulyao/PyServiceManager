@@ -24,14 +24,21 @@ Usage in service code:
 
 路由自动添加服务名前缀：注册 "/" 实际路由为 "/{service_name}/"。
 
+POST/PUT/DELETE/PATCH 的请求体以二进制安全方式转发（base64 传输）：
+request_info["body"] 为 UTF-8 严格解码后的 str；非 UTF-8 载荷（如图片）
+保留原始 bytes。
+
 可选参数（所有注册方法均支持）：
     auth: dict | None — 请求头鉴权配置，None 表示不鉴权（默认）。
           格式：{"header_name": "X-API-Key", "header_value": "secret123"}
     rate_limit: int — 每秒最大请求数，默认 10，设为 0 表示不限流。
 """
 
+import base64
+import hashlib
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -40,7 +47,6 @@ import time
 import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-
 
 # 模块文件所在目录（用于定位 web_daemon.py）
 _MODULE_DIR = Path(__file__).resolve().parent
@@ -66,12 +72,27 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+        raw_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
 
         try:
-            request_data = json.loads(body)
-        except json.JSONDecodeError:
-            request_data = {"method": "POST", "path": path, "headers": {}, "body": body, "query": {}}
+            request_data = json.loads(raw_body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            request_data = {"method": "POST", "path": path, "headers": {}, "body_b64": "", "query": {}}
+
+        # Binary-safe body: daemon sends base64; decode to bytes, then strict UTF-8
+        # str when possible (falls back to raw bytes for binary payloads).
+        body_b64 = request_data.get("body_b64", "")
+        if body_b64:
+            try:
+                body_bytes = base64.b64decode(body_b64)
+            except Exception:
+                body_bytes = b""
+            try:
+                request_data["body"] = body_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                request_data["body"] = body_bytes
+        else:
+            request_data.setdefault("body", None)
 
         try:
             response = callback(request_data)
@@ -134,26 +155,86 @@ class Module:
         self._port = server_cfg.get("port", 8910)
         self._host = server_cfg.get("host", "0.0.0.0")
 
-        # 数据目录：路由表和 API 数据文件存储位置
+        # 数据目录：默认共享目录 data/web-service（跨服务共享守护进程路由表），
+        # 显式 data_dir 配置优先。API 数据文件按服务名分层，语义不变。
         data_dir_str = ctx.module_config.get("data_dir", "")
         if data_dir_str:
             self._data_dir = Path(data_dir_str)
         else:
-            self._data_dir = ctx.data_dir / ".web-service"
+            self._data_dir = ctx.data_dir.parent.parent / "web-service"
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
-        # 启动守护进程（如果未运行）
-        if not self._is_daemon_running():
-            self._start_daemon()
+        # 启动守护进程（如果未运行）；代码指纹变化时自动重启以应用新版 daemon
+        if self._is_daemon_running():
+            if self._daemon_fingerprint_mismatch():
+                self._restart_daemon_for_upgrade()
+            else:
+                ctx.logger.info(
+                    f"Module {self.name} - service: {self._service_name}, "
+                    f"daemon already running on {self._host}:{self._port}, "
+                    f"url_prefix: {self._url_prefix}"
+                )
         else:
-            ctx.logger.info(
-                f"Module {self.name} - service: {self._service_name}, "
-                f"daemon already running on {self._host}:{self._port}, "
-                f"url_prefix: {self._url_prefix}"
-            )
+            self._start_daemon()
+
+        # 清理本服务的陈旧路由（服务崩溃残留，避免旧数据污染路由表）
+        self._cleanup_stale_routes()
 
         # 启动内部回调服务器（用于 POST/PUT/DELETE 路由的实时回调）
         self._start_callback_server()
+
+    def _daemon_fingerprint_mismatch(self) -> bool:
+        """daemon.json 缺失或 code_hash 与本地 web_daemon.py 不一致 → 需重启升级。
+        旧版 daemon 无指纹文件，视为不匹配（自动升级）。"""
+        fingerprint_file = self._data_dir / "daemon.json"
+        if not fingerprint_file.exists():
+            return True
+        try:
+            info = json.loads(fingerprint_file.read_text(encoding="utf-8"))
+        except Exception:
+            return True
+        local_hash = hashlib.sha256(
+            (_MODULE_DIR / "web_daemon.py").read_bytes()).hexdigest()
+        return info.get("code_hash") != local_hash
+
+    def _restart_daemon_for_upgrade(self):
+        """终止旧 daemon 并以本地代码重新拉起。"""
+        pid_file = self._data_dir / "web-service.pid"
+        try:
+            pid = int(pid_file.read_text().strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            # 等待退出（≤5s）
+            for _ in range(50):
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.1)
+        if self._logger:
+            self._logger.info(
+                f"Module {self.name}: daemon code changed, restarting for upgrade"
+            )
+        self._start_daemon()
+
+    def _cleanup_stale_routes(self):
+        """注销本服务前缀下的所有残留路由（上次运行的 routes.json 持久化残留）。"""
+        routes_file = self._data_dir / "routes.json"
+        if not routes_file.exists():
+            return
+        try:
+            routes = json.loads(routes_file.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        for path in list(routes.keys()):
+            if path.startswith(self._url_prefix):
+                self._unregister_with_daemon(path)
+
 
     def on_stop(self, ctx):
         """停止回调服务器、API 后台线程，注销本服务的路由。"""
@@ -218,19 +299,28 @@ class Module:
 
         if method_upper == "GET":
             # GET 路由：数据文件模式（后台刷新）
-            try:
-                initial_request = {
+            def _produce():
+                return callback({
                     "method": "GET", "path": full_path,
                     "headers": {}, "body": None, "query": {},
-                }
-                initial_response = callback(initial_request)
-                data_file = self._write_data_file(full_path, json.dumps(
-                    initial_response, ensure_ascii=False
-                ))
+                })
+
+            def _write(response):
+                # 与初始写入格式一致：裸 JSON，无 success/data 信封
+                return json.dumps(response, ensure_ascii=False)
+
+            try:
+                initial_response = _produce()
+                data_file = self._write_data_file(full_path, _write(initial_response))
             except Exception as e:
                 if self._logger:
                     self._logger.warning(f"Initial handler call failed: {e}")
-                data_file = ""
+                data_file = self._get_data_file_path(full_path)
+                data_file.parent.mkdir(parents=True, exist_ok=True)
+                data_file.write_text("{}", encoding="utf-8")
+
+            # 启动后台刷新线程（此前仅初始调用一次，数据永不更新）
+            self._start_refresh_thread(full_path, _produce, _write, data_file)
 
             route_info = {
                 "type": "api",
@@ -343,15 +433,17 @@ class Module:
         if full_path not in self._registered_paths:
             self._registered_paths.append(full_path)
 
-        # 启动后台线程定期刷新数据
-        stop_event = threading.Event()
-        thread = threading.Thread(
-            target=self._api_refresh_loop,
-            args=(callback, data_file, stop_event),
-            daemon=True,
-        )
-        thread.start()
-        self._api_threads[full_path] = (thread, stop_event)
+        # 启动后台线程定期刷新数据（统一线程管理，重复注册时先停旧线程）
+        def _produce():
+            return callback()
+
+        def _write(data):
+            return json.dumps(
+                {"success": True, "data": data, "error": None},
+                ensure_ascii=False,
+            )
+
+        self._start_refresh_thread(full_path, _produce, _write, data_file)
 
         return {
             "success": True,
@@ -492,16 +584,12 @@ class Module:
         """启动内部回调服务器，用于 POST/PUT/DELETE 路由的实时回调。
 
         使用 ThreadingHTTPServer：慢回调（如 LLM 调用）不会阻塞其他回调请求。
+        直接绑定随机端口（("127.0.0.1", 0)），消除临时 server 占端口→关闭→重建
+        的 TOCTOU 竞态。
         """
-        # 绑定到随机端口
-        tmp_server = ThreadingHTTPServer(("127.0.0.1", 0), _CallbackHandler)
-        self._callback_port = tmp_server.server_address[1]
-        tmp_server.server_close()
-
-        # 创建正式的回调服务器
         _CallbackHandler.callbacks = self._callback_handlers
-        self._callback_server = ThreadingHTTPServer(("127.0.0.1", self._callback_port), _CallbackHandler)
-        self._callback_server.callbacks = self._callback_handlers
+        self._callback_server = ThreadingHTTPServer(("127.0.0.1", 0), _CallbackHandler)
+        self._callback_port = self._callback_server.server_address[1]
         thread = threading.Thread(target=self._callback_server.serve_forever, daemon=True)
         thread.start()
 
@@ -532,13 +620,16 @@ class Module:
                 self._logger.warning(f"Failed to register route {method} {path}: {e}")
 
     def _unregister_with_daemon(self, path):
-        """通过 HTTP 从守护进程注销路由。"""
-        url = f"http://127.0.0.1:{self._port}/_register"
+        """通过 HTTP 从守护进程注销路由。
+
+        使用守护进程的 POST /_unregister 路由（do_POST → _handle_registration），
+        与其实现匹配；旧的 DELETE /_register 在守护进程侧并不存在。"""
+        url = f"http://127.0.0.1:{self._port}/_unregister"
         payload = json.dumps({"path": path}).encode("utf-8")
 
         try:
             req = urllib.request.Request(
-                url, data=payload, method="DELETE",
+                url, data=payload, method="POST",
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=5)
@@ -551,25 +642,46 @@ class Module:
         return self._data_dir / self._service_name / f"{safe_name}.json"
 
     def _write_data_file(self, full_path, content):
-        """写入 API 数据文件，返回文件路径。"""
+        """写入 API 数据文件（原子写：临时文件 + os.replace），返回文件路径。"""
         data_file = self._get_data_file_path(full_path)
         data_file.parent.mkdir(parents=True, exist_ok=True)
-        data_file.write_text(content, encoding="utf-8")
+        tmp_file = data_file.with_suffix(".json.tmp")
+        tmp_file.write_text(content, encoding="utf-8")
+        os.replace(tmp_file, data_file)
         return data_file
 
-    def _api_refresh_loop(self, callback, data_file, stop_event):
-        """后台线程：定期调用 callback 并更新数据文件。"""
+    def _write_data_file_atomic(self, data_file, content):
+        """原子写数据文件（刷新线程使用）。"""
+        tmp_file = data_file.with_suffix(".json.tmp")
+        tmp_file.write_text(content, encoding="utf-8")
+        os.replace(tmp_file, data_file)
+
+    def _start_refresh_thread(self, full_path, produce, write, data_file):
+        """为 full_path 启动后台刷新线程；重复注册同一路径时先停旧线程。"""
+        old = self._api_threads.pop(full_path, None)
+        if old is not None:
+            old_thread, old_stop = old
+            old_stop.set()
+            old_thread.join(timeout=3)
+
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=self._api_refresh_loop,
+            args=(produce, write, data_file, stop_event),
+            daemon=True,
+        )
+        thread.start()
+        self._api_threads[full_path] = (thread, stop_event)
+
+    def _api_refresh_loop(self, produce, write, data_file, stop_event):
+        """后台线程：定期调用 produce() 并以 write() 的格式原子写数据文件。"""
         while not stop_event.is_set():
             stop_event.wait(timeout=5)  # 每 5 秒刷新一次
             if stop_event.is_set():
                 break
             try:
-                data = callback()
-                response_body = json.dumps(
-                    {"success": True, "data": data, "error": None},
-                    ensure_ascii=False,
-                )
-                data_file.write_text(response_body, encoding="utf-8")
+                data = produce()
+                self._write_data_file_atomic(data_file, write(data))
             except Exception as e:
                 if self._logger:
                     self._logger.debug(f"API refresh failed for {data_file.name}: {e}")

@@ -12,6 +12,10 @@
 """
 
 import argparse
+import base64
+import collections
+import hashlib
+import hmac
 import json
 import os
 import signal
@@ -31,8 +35,8 @@ _ROUTES_LOCK = threading.Lock()
 _ROUTES = {}  # {path: {method: route_info}}
 _LOGGER = None
 
-# 限流：每条路由维护最近 1 秒内的请求时间戳列表
-_RATE_LIMITS = {}  # {path: [timestamp, ...]}
+# 限流：每条路由维护最近 1 秒内的请求时间戳双端队列
+_RATE_LIMITS = {}  # {path: deque[timestamp, ...]}
 _RATE_LOCK = threading.Lock()
 
 
@@ -51,7 +55,7 @@ def _check_auth(headers, auth_config):
     header_name = auth_config.get("header_name", "X-API-Key")
     header_value = auth_config.get("header_value", "")
     actual = headers.get(header_name, "")
-    return actual == header_value
+    return hmac.compare_digest(actual, header_value)
 
 
 def _check_rate_limit(path, limit):
@@ -69,14 +73,16 @@ def _check_rate_limit(path, limit):
     now = time.time()
     cutoff = now - 1.0
     with _RATE_LOCK:
-        timestamps = _RATE_LIMITS.get(path, [])
+        timestamps = _RATE_LIMITS.get(path)
+        if timestamps is None:
+            timestamps = collections.deque()
+            _RATE_LIMITS[path] = timestamps
         # 移除 1 秒前的时间戳
         while timestamps and timestamps[0] < cutoff:
-            timestamps.pop(0)
+            timestamps.popleft()
         if len(timestamps) >= limit:
             return False
         timestamps.append(now)
-        _RATE_LIMITS[path] = timestamps
         return True
 
 
@@ -88,15 +94,17 @@ def _log(msg, level="INFO"):
 
 
 def _save_routes(data_dir):
-    """持久化路由表到磁盘。"""
+    """持久化路由表到磁盘（原子写：临时文件 + os.replace）。"""
     routes_file = data_dir / "routes.json"
+    tmp_file = data_dir / "routes.json.tmp"
     try:
         serializable = {}
         for path, methods in _ROUTES.items():
             serializable[path] = {}
             for method, info in methods.items():
                 serializable[path][method] = info
-        routes_file.write_text(json.dumps(serializable, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp_file.write_text(json.dumps(serializable, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp_file, routes_file)
     except Exception as e:
         _log(f"Failed to save routing table: {e}", "ERROR")
 
@@ -169,6 +177,11 @@ class DaemonHandler(BaseHTTPRequestHandler):
         """DELETE 方式注销路由，或代理 DELETE 请求。"""
         path = self.path.split("?")[0]
         if path.startswith("/_unregister/"):
+            # 安全检查：注销 API 仅限 localhost（与 _handle_registration 一致）
+            remote = self.client_address[0]
+            if remote not in ("127.0.0.1", "::1", "localhost"):
+                self._send_json(403, {"error": "Unregister API is localhost only"})
+                return
             route_path = "/" + path[len("/_unregister/"):]
             removed = 0
             with _ROUTES_LOCK:
@@ -281,10 +294,11 @@ class DaemonHandler(BaseHTTPRequestHandler):
             "method": method,
             "path": path,
             "headers": dict(self.headers),
-            "body": body.decode("utf-8", errors="replace") if body else "",
+            # Binary-safe transport: arbitrary bytes (e.g. file uploads)
+            # survive the JSON hop via base64.
+            "body_b64": base64.b64encode(body).decode("ascii") if body else "",
             "query": query,
         }).encode("utf-8")
-
         try:
             req = urllib.request.Request(
                 callback_url,
@@ -443,6 +457,15 @@ def main():
     pid_file = data_dir / "web-service.pid"
     pid_file.write_text(str(os.getpid()))
 
+    # 代码指纹：模块据此检测 daemon 版本变化并自动重启升级
+    daemon_file = Path(__file__).resolve()
+    code_hash = hashlib.sha256(daemon_file.read_bytes()).hexdigest()
+    fingerprint_file = data_dir / "daemon.json"
+    fingerprint_file.write_text(json.dumps({
+        "pid": os.getpid(),
+        "code_hash": code_hash,
+    }), encoding="utf-8")
+
     # 多线程：慢回调（如 LLM 调用）代理期间不阻塞 8910 上其他服务的请求
     httpd = ThreadingHTTPServer((args.host, args.port), DaemonHandler)
 
@@ -461,6 +484,8 @@ def main():
         httpd.server_close()
         if pid_file.exists():
             pid_file.unlink()
+        if fingerprint_file.exists():
+            fingerprint_file.unlink()
         _log("Daemon stopped")
 
 

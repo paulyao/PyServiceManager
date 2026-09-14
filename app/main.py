@@ -34,11 +34,13 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
-    # Ensure built-in modules are registered
     from app.core.module_manager import ModuleManager
     from app.database import async_session
+
+    module_manager = ModuleManager()
+
+    # Ensure built-in modules are registered (and code synced)
     async with async_session() as session:
-        module_manager = ModuleManager()
         created = await module_manager.ensure_builtin_modules(session)
         if created:
             logger.info(f"Registered built-in modules: {created}")
@@ -46,16 +48,12 @@ async def lifespan(app: FastAPI):
     await config_watcher.start()
 
     # Repair module paths (fix absolute/stale paths from dev environment)
-    from app.core.module_manager import ModuleManager
-    from app.database import async_session
     async with async_session() as session:
-        module_manager = ModuleManager()
         repaired = await module_manager.repair_paths(session)
         if repaired:
             logger.info(f"Repaired {repaired} module path entries")
 
     # Sync all service statuses
-    from app.database import async_session
     async with async_session() as session:
         await service_manager.sync_all_status(session)
 
@@ -139,7 +137,7 @@ async def health():
 
 def cli():
     """CLI entry point."""
-    reload = os.getenv("PYSERVICE_RELOAD", "true").lower() in ("true", "1", "yes")
+    reload = os.getenv("PYSERVICE_RELOAD", "false").lower() in ("true", "1", "yes")
     uvicorn.run("app.main:app", host=HOST, port=PORT, reload=reload, timeout_graceful_shutdown=3)
 
 

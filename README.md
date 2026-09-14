@@ -86,6 +86,7 @@ python -m app.main
 | `PYSERVICE_HOST` | `0.0.0.0` | 监听地址 |
 | `PYSERVICE_PORT` | `8900` | 监听端口 |
 | `PYSERVICE_PYTHON` | `sys.executable` | 服务进程使用的 Python 解释器路径 |
+| `PYSERVICE_RELOAD` | `false` | uvicorn 热重载；开发时设为 `true`（生产保持关闭以避免 reload 模式的子进程开销） |
 
 ## 项目结构
 

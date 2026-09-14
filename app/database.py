@@ -12,9 +12,13 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 @event.listens_for(engine.sync_engine, "connect")
 def _enable_sqlite_fk(dbapi_conn, connection_record):
     """SQLite disables foreign key enforcement by default; enable it per connection
-    so ON DELETE CASCADE on service_modules actually works."""
+    so ON DELETE CASCADE on service_modules actually works. Also enable WAL
+    journaling (better concurrent read performance, persists in the DB file) and
+    a busy timeout so lock contention waits instead of failing immediately."""
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
 
 
@@ -27,6 +31,12 @@ async def init_db():
     from app.models import service, module, service_module  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Covering index for module_id lookups (service_count, services-using-
+        # module, module rename binding loops). The (service_id, module_id)
+        # unique constraint already indexes the service_id side.
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_service_modules_module_id ON service_modules (module_id)"
+        ))
         # Migration: add is_builtin column to modules table
         result = await conn.execute(text("PRAGMA table_info(modules)"))
         columns = [row[1] for row in result.fetchall()]
@@ -43,8 +53,6 @@ async def init_db():
             "UPDATE modules SET builtin_source = name WHERE is_builtin = 1 AND builtin_source IS NULL"
         ))
         # Migration: add requirements column to modules table
-        result = await conn.execute(text("PRAGMA table_info(modules)"))
-        columns = [row[1] for row in result.fetchall()]
         if "requirements" not in columns:
             await conn.execute(text(
                 "ALTER TABLE modules ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'"
@@ -64,8 +72,6 @@ async def init_db():
                 "ALTER TABLE services ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'"
             ))
         # Migration: add remarks column to services table
-        result = await conn.execute(text("PRAGMA table_info(services)"))
-        columns = [row[1] for row in result.fetchall()]
         if "remarks" not in columns:
             await conn.execute(text(
                 "ALTER TABLE services ADD COLUMN remarks TEXT DEFAULT NULL"

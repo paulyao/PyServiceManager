@@ -10,15 +10,13 @@ Usage in service code:
     sqlite_mod.execute(
         db_path="/path/to/db.sqlite",
         sql="CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)",
-        commit=True,
     )
 
-    # 插入
+    # 插入（默认自动提交）
     sqlite_mod.execute(
         db_path="/path/to/db.sqlite",
         sql="INSERT OR REPLACE INTO users VALUES (?, ?)",
         params=(1, "alice"),
-        commit=True,
     )
 
     # 查询
@@ -35,10 +33,26 @@ Usage in service code:
         sql="INSERT OR REPLACE INTO users VALUES (?, ?)",
         rows=[(1, "alice"), (2, "bob")],
     )
+
+注意：execute 的 commit 参数默认 True（DML 自动提交落盘）；
+需要多条语句组成显式事务时传 commit=False 并自行控制提交。
+连接统一开启 WAL 与 busy_timeout（不可用时自动降级）。
 """
 
+import contextlib
 import sqlite3
 
+
+def _connect(db_path):
+    """打开 SQLite 连接：Row 工厂 + WAL + busy_timeout（失败降级）。"""
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+    except sqlite3.Error:
+        pass  # 只读文件系统等场景降级
+    return conn
 
 class Module:
     name = "sqlite-helper"
@@ -48,36 +62,25 @@ class Module:
     def __init__(self):
         self._logger = None
 
-    def on_start(self, ctx):
-        self._logger = ctx.logger
-        ctx.logger.info(f"Module {self.name} started - service: {ctx.service_name}")
-
-    def on_stop(self, ctx):
-        ctx.logger.info(f"Module {self.name} stopped")
-
-    def on_config_reload(self, ctx):
-        self._logger = ctx.logger
-        ctx.logger.info(f"Module {self.name} config reloaded")
-
-    def execute(self, db_path, sql, params=None, commit=False):
+    def execute(self, db_path, sql, params=None, commit=True):
         """执行单条 SQL（DDL/DML），返回影响行数。
 
         Args:
             db_path: SQLite 数据库文件路径。
             sql: SQL 语句，使用 ? 占位符。
             params: 参数元组，可选。
-            commit: 是否提交事务，默认 False。
+            commit: 是否提交事务，默认 True（DML 自动落盘；
+                    显式多语句事务时可传 False 并自行控制）。
 
         Returns:
             dict: {"success": bool, "data": {"rowcount": int}, "error": str|None}
         """
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.execute(sql, params or ())
-            rowcount = cursor.rowcount
-            if commit:
-                conn.commit()
-            conn.close()
+            with contextlib.closing(_connect(db_path)) as conn:
+                cursor = conn.execute(sql, params or ())
+                rowcount = cursor.rowcount
+                if commit:
+                    conn.commit()
             return {
                 "success": True,
                 "data": {"rowcount": rowcount},
@@ -104,16 +107,15 @@ class Module:
             dict: {"success": bool, "data": {"rows": list[dict]}, "error": str|None}
         """
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(sql, params or ())
-            rows = [dict(row) for row in cursor.fetchall()]
-            conn.close()
+            with contextlib.closing(_connect(db_path)) as conn:
+                cursor = conn.execute(sql, params or ())
+                rows = [dict(row) for row in cursor.fetchall()]
             return {
                 "success": True,
                 "data": {"rows": rows},
                 "error": None,
             }
+
         except Exception as e:
             if self._logger:
                 self._logger.error(f"[{self.name}] query error: {e}")
@@ -135,11 +137,9 @@ class Module:
             dict: {"success": bool, "data": {"row": dict|None}, "error": str|None}
         """
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(sql, params or ())
-            row = cursor.fetchone()
-            conn.close()
+            with contextlib.closing(_connect(db_path)) as conn:
+                cursor = conn.execute(sql, params or ())
+                row = cursor.fetchone()
             return {
                 "success": True,
                 "data": {"row": dict(row) if row else None},
@@ -162,15 +162,13 @@ class Module:
             sql: INSERT SQL 语句，使用 ? 占位符。
             rows: 参数元组列表，如 [(1, "alice"), (2, "bob")]。
 
-        Returns:
             dict: {"success": bool, "data": {"rowcount": int}, "error": str|None}
         """
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.executemany(sql, rows)
-            rowcount = cursor.rowcount
-            conn.commit()
-            conn.close()
+            with contextlib.closing(_connect(db_path)) as conn:
+                cursor = conn.executemany(sql, rows)
+                rowcount = cursor.rowcount
+                conn.commit()
             return {
                 "success": True,
                 "data": {"rowcount": rowcount},

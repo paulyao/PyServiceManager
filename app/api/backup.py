@@ -1,9 +1,11 @@
 """Backup & Restore API routes."""
 import json
 import logging
+import os
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
@@ -35,16 +37,11 @@ async def create_backup(
 ):
     """Create a backup ZIP archive and return it for download."""
     try:
-        buffer, filename = await backup_manager.create_backup(
+        temp_path, filename = await backup_manager.create_backup(
             session=session,
             module_names=data.modules,
             service_names=data.services,
             include_bindings=data.include_bindings,
-        )
-        return StreamingResponse(
-            content=iter([buffer.getvalue()]),
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except BackupManagerError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -52,6 +49,12 @@ async def create_backup(
         logger.exception("Failed to create backup")
         raise HTTPException(status_code=500, detail=f"创建备份失败: {str(e)}")
 
+    return FileResponse(
+        path=temp_path,
+        filename=filename,
+        media_type="application/zip",
+        background=BackgroundTask(os.unlink, temp_path),
+    )
 
 @router.post("/preview", response_model=BackupPreviewResponse)
 async def preview_backup(

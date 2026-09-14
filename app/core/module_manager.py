@@ -1,8 +1,10 @@
 """Module lifecycle management: CRUD, file management, service binding."""
+import asyncio
+import hashlib
 import json
 import logging
+import os
 import shutil
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import delete, select, func
@@ -65,6 +67,9 @@ class ModuleManager:
 
     async def ensure_builtin_modules(self, session: AsyncSession) -> list[str]:
         """Ensure all built-in modules from builtin_modules/ are registered.
+
+        For already-registered builtin modules, syncs code files from
+        builtin_modules/<name>/ to data/modules/<name>/ (content-diff copy).
         Returns list of newly created module names."""
         if not BUILTIN_MODULES_DIR.exists():
             return []
@@ -82,37 +87,55 @@ class ModuleManager:
 
             # Check if already registered (by name or by builtin_source for renamed modules)
             existing_by_name = await session.execute(select(Module).where(Module.name == name))
-            if existing_by_name.scalar_one_or_none():
-                continue
-            existing_by_source = await session.execute(
-                select(Module).where(Module.builtin_source == name, Module.is_builtin == True)  # noqa: E712
-            )
-            if existing_by_source.scalar_one_or_none():
+            existing_mod = existing_by_name.scalar_one_or_none()
+            if existing_mod is None:
+                existing_by_source = await session.execute(
+                    select(Module).where(
+                        Module.builtin_source == name,
+                        Module.is_builtin == True,  # noqa: E712
+                    )
+                )
+                existing_mod = existing_by_source.scalar_one_or_none()
+
+            if existing_mod is not None:
+                # Already registered: sync code files into the runtime copy
+                # (services load from data/modules/, not builtin_modules/)
+                target_dir = MODULES_DIR / existing_mod.name
+                synced = await asyncio.to_thread(
+                    self._sync_builtin_files, module_dir, target_dir)
+                if synced > 0:
+                    logger.info(
+                        "Synced %d file(s) into builtin module '%s' (%s)",
+                        synced, existing_mod.name, target_dir,
+                    )
                 continue
 
             # Read code and optional config
-            code = script_file.read_text(encoding="utf-8")
-            config_file = module_dir / "config.toml"
-            config_toml = config_file.read_text(encoding="utf-8") if config_file.exists() else None
+            def _read_source() -> tuple[str, str | None]:
+                code = script_file.read_text(encoding="utf-8")
+                config_file = module_dir / "config.toml"
+                config_toml = config_file.read_text(encoding="utf-8") if config_file.exists() else None
+                return code, config_toml
+
+            code, config_toml = await asyncio.to_thread(_read_source)
 
             # Validate
             valid, errors, module_info = validate_module_code(code)
             if not valid:
                 continue
 
-            # Create module directory in data/
-            target_dir = MODULES_DIR / name
-            target_dir.mkdir(parents=True, exist_ok=True)
+            # Create module directory in data/ and copy files
+            def _copy_builtin() -> None:
+                target_dir = MODULES_DIR / name
+                target_dir.mkdir(parents=True, exist_ok=True)
+                (target_dir / "module.py").write_text(code, encoding="utf-8")
+                if config_toml:
+                    (target_dir / "config.toml").write_text(config_toml, encoding="utf-8")
 
-            # Copy script
-            target_script = target_dir / "module.py"
-            target_script.write_text(code, encoding="utf-8")
+            await asyncio.to_thread(_copy_builtin)
 
-            # Copy config if present
-            target_config = None
-            if config_toml:
-                target_config = target_dir / "config.toml"
-                target_config.write_text(config_toml, encoding="utf-8")
+            target_script = MODULES_DIR / name / "module.py"
+            target_config = (MODULES_DIR / name / "config.toml") if config_toml else None
 
             # Create DB record with is_builtin=True
             module = Module(
@@ -139,6 +162,35 @@ class ModuleManager:
 
         return created
 
+    @staticmethod
+    def _sync_builtin_files(source_dir: Path, target_dir: Path) -> int:
+        """Sync code files from builtin_modules/<name>/ to data/modules/<name>/.
+
+        Skips __pycache__ and *.pyc; only overwrites files whose sha256
+        differs; never deletes extra files in target. Returns count of
+        files copied."""
+        copied = 0
+        if not source_dir.exists():
+            return 0
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for src in source_dir.rglob("*"):
+            if src.is_dir():
+                continue
+            rel = src.relative_to(source_dir)
+            # Skip caches
+            if "__pycache__" in rel.parts or rel.suffix == ".pyc":
+                continue
+            dst = target_dir / rel
+            if dst.exists():
+                src_hash = hashlib.sha256(src.read_bytes()).hexdigest()
+                dst_hash = hashlib.sha256(dst.read_bytes()).hexdigest()
+                if src_hash == dst_hash:
+                    continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dst))
+            copied += 1
+        return copied
+
     async def create(
         self,
         session: AsyncSession,
@@ -147,9 +199,9 @@ class ModuleManager:
         description: str | None = None,
         version: str = "1.0.0",
         author: str | None = None,
-        code_source: str = "editor",
         code: str | None = None,
         config_toml: str | None = None,
+        requirements: list[str] | None = None,
     ) -> Module:
         """Create a new module."""
         validate_service_name(name)
@@ -168,13 +220,14 @@ class ModuleManager:
         if not valid:
             raise ModuleManagerError("Invalid module code", "; ".join(errors))
 
-        # Create module directory
-        module_dir = MODULES_DIR / name
-        module_dir.mkdir(parents=True, exist_ok=True)
+        # Create module directory and write files
+        def _write_module() -> Path:
+            module_dir = MODULES_DIR / name
+            module_dir.mkdir(parents=True, exist_ok=True)
+            (module_dir / "module.py").write_text(code, encoding="utf-8")
+            return module_dir / "module.py"
 
-        # Write module.py
-        script_path = module_dir / "module.py"
-        script_path.write_text(code, encoding="utf-8")
+        script_path = await asyncio.to_thread(_write_module)
 
         # Write config.toml if provided
         config_path = None
@@ -182,8 +235,8 @@ class ModuleManager:
             errors = validate_toml_content(config_toml)
             if errors:
                 raise ModuleManagerError("Invalid TOML config", "; ".join(errors))
-            config_path = module_dir / "config.toml"
-            config_path.write_text(config_toml, encoding="utf-8")
+            config_path = script_path.parent / "config.toml"
+            await asyncio.to_thread(config_path.write_text, config_toml, "utf-8")
 
         # Create database record
         module = Module(
@@ -196,6 +249,7 @@ class ModuleManager:
             script_path=self._relative_path(script_path),
             config_path=self._relative_path(config_path) if config_path else None,
         )
+        module.requirements_list = requirements or []
         session.add(module)
         try:
             await session.commit()
@@ -229,13 +283,10 @@ class ModuleManager:
             existing = await session.execute(select(Module).where(Module.name == new_name))
             if existing.scalar_one_or_none():
                 raise ModuleManagerError(f"Module '{new_name}' already exists")
-
-            old_dir = MODULES_DIR / name
-            new_dir = MODULES_DIR / new_name
-
             # Rename directory on disk
             if old_dir.exists():
-                old_dir.rename(new_dir)
+                await asyncio.to_thread(old_dir.rename, new_dir)
+
 
             # Update script_path and config_path
             old_script = Path(module.script_path)
@@ -258,10 +309,10 @@ class ModuleManager:
                 select(ServiceModule).where(ServiceModule.module_id == module.id)
             )
             bound_services = bindings.scalars().all()
-            for sm in bound_services:
-                svc_result = await session.execute(select(Service).where(Service.id == sm.service_id))
-                svc = svc_result.scalar_one_or_none()
-                if svc:
+            if bound_services:
+                svc_ids = [sm.service_id for sm in bound_services]
+                for svc in (await session.execute(
+                    select(Service).where(Service.id.in_(svc_ids)))).scalars():
                     await self._write_modules_registry(session, svc)
 
         if display_name is not None:
@@ -294,7 +345,7 @@ class ModuleManager:
         # Remove module directory
         module_dir = MODULES_DIR / name
         if module_dir.exists():
-            shutil.rmtree(module_dir)
+            await asyncio.to_thread(shutil.rmtree, module_dir)
 
         # Explicitly remove service bindings first (do not rely on DB cascade alone)
         await session.execute(delete(ServiceModule).where(ServiceModule.module_id == module.id))
@@ -346,14 +397,14 @@ class ModuleManager:
             raise ModuleManagerError("Invalid module code", "; ".join(errors))
 
         script_path = self._resolve_path(module.script_path)
-        script_path.write_text(code, encoding="utf-8")
+        await asyncio.to_thread(script_path.write_text, code, "utf-8")
 
         if config_toml is not None:
             errors = validate_toml_content(config_toml)
             if errors:
                 raise ModuleManagerError("Invalid TOML config", "; ".join(errors))
             config_path = self._resolve_path(module.config_path) if module.config_path else MODULES_DIR / name / "config.toml"
-            config_path.write_text(config_toml, encoding="utf-8")
+            await asyncio.to_thread(config_path.write_text, config_toml, "utf-8")
             module.config_path = self._relative_path(config_path)
 
         module.updated_at = datetime.now()
@@ -477,10 +528,15 @@ class ModuleManager:
         )
         bindings = bindings_result.scalars().all()
 
+        mods = {}
+        if bindings:
+            ids = [b.module_id for b in bindings]
+            mods = {m.id: m for m in (await session.execute(
+                select(Module).where(Module.id.in_(ids)))).scalars()}
+
         registry = []
         for binding in bindings:
-            mod_result = await session.execute(select(Module).where(Module.id == binding.module_id))
-            mod = mod_result.scalar_one_or_none()
+            mod = mods.get(binding.module_id)
             if mod:
                 registry.append({
                     "name": mod.name,
@@ -489,7 +545,9 @@ class ModuleManager:
                 })
 
         registry_path = SERVICES_DIR / service.name / ".modules.json"
-        registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+        tmp_path = registry_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+        os.replace(tmp_path, registry_path)
 
     async def repair_paths(self, session: AsyncSession) -> int:
         """Repair module script_path and config_path stored as absolute paths.
@@ -509,14 +567,8 @@ class ModuleManager:
                 builtin_dir = BUILTIN_MODULES_DIR / mod.builtin_source
                 builtin_script = builtin_dir / "module.py"
                 if builtin_script.exists():
-                    target_dir = MODULES_DIR / mod.name
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    target_script = target_dir / "module.py"
-                    shutil.copy2(str(builtin_script), str(target_script))
-                    builtin_config = builtin_dir / "config.toml"
-                    if builtin_config.exists():
-                        target_config = target_dir / "config.toml"
-                        shutil.copy2(str(builtin_config), str(target_config))
+                    target_script = await asyncio.to_thread(
+                        self._restore_builtin_files, builtin_dir, MODULES_DIR / mod.name)
                     script_path = target_script
                     logger.info(f"Restored builtin module '%s' files from '%s'", mod.name, builtin_dir)
 
@@ -553,3 +605,14 @@ class ModuleManager:
         if mod is None:
             raise ModuleNotFoundError(f"Module '{name}' not found")
         return mod
+
+    @staticmethod
+    def _restore_builtin_files(builtin_dir: Path, target_dir: Path) -> Path:
+        """Copy builtin module files into target_dir (synchronous; run in thread)."""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_script = target_dir / "module.py"
+        shutil.copy2(str(builtin_dir / "module.py"), str(target_script))
+        builtin_config = builtin_dir / "config.toml"
+        if builtin_config.exists():
+            shutil.copy2(str(builtin_config), str(target_dir / "config.toml"))
+        return target_script

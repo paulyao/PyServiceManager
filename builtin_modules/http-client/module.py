@@ -72,10 +72,27 @@ def _create_ssl_context():
 def _is_retryable_error(status_code):
     """判断 HTTP 状态码是否属于可重试错误。
 
-    可重试: 无状态码（网络/超时错误）或 5xx（服务端临时故障）。
-    不可重试: 4xx（客户端错误）。
+    5xx 服务端错误与 429 限流均属瞬态错误，可安全重试；
+    4xx（除 429）为请求本身问题，重试无意义。
     """
-    return status_code is None or status_code >= 500
+    return status_code is None or status_code >= 500 or status_code == 429
+
+
+# 幂等方法集合：仅这些方法默认自动重试（重试不会产生重复副作用）
+_IDEMPOTENT_METHODS = {"GET", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE"}
+
+
+_SSL_CONTEXT = None
+
+
+def _get_ssl_context():
+    """获取缓存的 SSL 上下文（首次创建后复用）。
+
+    创建上下文涉及 CA bundle 解析 + 平台探测，每请求重建是纯浪费。"""
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        _SSL_CONTEXT = _create_ssl_context()
+    return _SSL_CONTEXT
 
 
 class Module:
@@ -112,6 +129,7 @@ class Module:
             "base_delay": retry_cfg.get("base_delay", 1),
             "max_delay": retry_cfg.get("max_delay", 30),
             "max_total_time": retry_cfg.get("max_total_time", 120),
+            "retry_non_idempotent": retry_cfg.get("retry_non_idempotent", False),
         }
 
     def _retry_delay(self, attempt, cfg, deadline):
@@ -206,12 +224,18 @@ class Module:
                 "success": bool,
                 "status_code": int | None,
                 "headers": dict | None,
-                "body": str | None,
+                "body": str | None,           -- UTF-8 解码文本（errors=replace）
+                "body_bytes": bytes | None,   -- 原始响应体（二进制安全）
                 "json": dict/list | None,
                 "error": str | None,
-                "retry_count": int  # 新增：实际重试次数（0=首次成功）
+                "retry_count": int            -- 实际重试次数（0=首次成功）
             }
+
+        重试策略：仅幂等方法（GET/HEAD/PUT/DELETE/OPTIONS/TRACE）在 5xx/429/
+        网络错误时自动重试；非幂等方法（POST/PATCH）默认只发一次（可经
+        retry.retry_non_idempotent=true 开启）。
         """
+
         # 构建请求（只执行一次）
         if params:
             separator = "&" if "?" in url else "?"
@@ -235,11 +259,17 @@ class Module:
             method=method.upper(),
         )
         req.add_header("User-Agent", "PyService-HttpClient/1.0")
-        ssl_ctx = _create_ssl_context()
+        ssl_ctx = _get_ssl_context()
 
         # 读取重试配置
         cfg = self._get_retry_config(self._ctx)
-        max_attempts = cfg["max_retries"] + 1 if cfg["enabled"] else 1
+        if (cfg["enabled"]
+                and method.upper() not in _IDEMPOTENT_METHODS
+                and not cfg["retry_non_idempotent"]):
+            # 非幂等请求（如 POST）默认不重试：盲重试会造成重复副作用
+            max_attempts = 1
+        else:
+            max_attempts = cfg["max_retries"] + 1 if cfg["enabled"] else 1
         deadline = time.time() + cfg["max_total_time"] if cfg["enabled"] else 0
 
         # 重试循环
@@ -248,7 +278,8 @@ class Module:
                 with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as response:
                     status_code = response.status
                     resp_headers = dict(response.headers)
-                    resp_body = response.read().decode("utf-8", errors="replace")
+                    resp_body_bytes = response.read()
+                    resp_body = resp_body_bytes.decode("utf-8", errors="replace")
 
                     resp_json = None
                     try:
@@ -261,6 +292,7 @@ class Module:
                         "status_code": status_code,
                         "headers": resp_headers,
                         "body": resp_body,
+                        "body_bytes": resp_body_bytes,
                         "json": resp_json,
                         "error": None,
                         "retry_count": attempt,
@@ -273,11 +305,13 @@ class Module:
 
                 if not retryable or attempt >= max_attempts - 1:
                     resp_body = None
+                    resp_body_bytes = None
                     resp_json = None
                     resp_headers = None
                     try:
                         resp_headers = dict(e.headers)
-                        resp_body = e.read().decode("utf-8", errors="replace")
+                        resp_body_bytes = e.read()
+                        resp_body = resp_body_bytes.decode("utf-8", errors="replace")
                         resp_json = _json_mod.loads(resp_body)
                     except Exception:
                         pass
@@ -286,6 +320,7 @@ class Module:
                         "status_code": status_code,
                         "headers": resp_headers,
                         "body": resp_body,
+                        "body_bytes": resp_body_bytes,
                         "json": resp_json,
                         "error": error_msg,
                         "retry_count": attempt,

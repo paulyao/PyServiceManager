@@ -99,6 +99,8 @@ def _invalidate_metadata_cache() -> None:
     """
     # Clear the per-distribution cache in importlib.metadata
     # Works on Python 3.11+ where _cached_name is used internally
+    global _version_cache
+    _version_cache.clear()
     try:
         importlib.invalidate_caches()
         # Also clear the fast_path-based cache if present
@@ -106,6 +108,22 @@ def _invalidate_metadata_cache() -> None:
             importlib.metadata._cache.clear()
     except Exception:
         pass
+
+
+_version_cache: dict[str, str | None] = {}
+"""Caches get_version() results per distribution name.
+PackageNotFoundError is cached as None. Cleared after installs."""
+
+
+def _get_cached_version(name: str) -> str | None:
+    """get_version result cache; returns None when not installed.
+    Avoids repeated importlib.metadata disk scans within a request."""
+    if name not in _version_cache:
+        try:
+            _version_cache[name] = get_version(name)
+        except PackageNotFoundError:
+            _version_cache[name] = None
+    return _version_cache[name]
 
 
 @dataclass
@@ -178,16 +196,11 @@ def check_requirements(requirements: list[str]) -> CheckResult:
             ))
             missing.append(spec)
             continue
-
         pkg_name = normalize_package_name(req.name)
         specifier = str(req.specifier) if req.specifier else ""
 
-        try:
-            installed_ver = get_version(req.name)
-            installed = True
-        except PackageNotFoundError:
-            installed = False
-            installed_ver = None
+        installed_ver = _get_cached_version(req.name)
+        installed = installed_ver is not None
 
         if not installed:
             satisfied = False

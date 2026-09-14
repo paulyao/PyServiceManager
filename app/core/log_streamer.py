@@ -12,6 +12,32 @@ from app.config import SERVICES_DIR
 logger = logging.getLogger(__name__)
 
 
+def _tail(path: Path, lines: int) -> list[str]:
+    """Read the last N lines of a file by scanning backwards in 64KB blocks.
+
+    Avoids loading the whole file into memory (log files can be large)."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)  # end of file
+        end = f.tell()
+        remaining = end
+        chunks: list[bytes] = []
+        newline_count = 0
+        block_size = 64 * 1024
+        while remaining > 0:
+            read_size = min(block_size, remaining)
+            remaining -= read_size
+            f.seek(remaining)
+            chunk = f.read(read_size)
+            chunks.append(chunk)
+            newline_count += chunk.count(b"\n")
+            if newline_count > lines:
+                break
+        data = b"".join(reversed(chunks))
+        text = data.decode("utf-8", errors="replace")
+        all_lines = text.splitlines()
+        return all_lines[-lines:] if lines > 0 else []
+
+
 class LogStreamer:
     """Reads service log files and streams them via WebSocket."""
 
@@ -23,6 +49,8 @@ class LogStreamer:
     SEND_TIMEOUT: float = 10.0
     # Idle poll interval when no new log lines are available (seconds)
     POLL_INTERVAL: float = 0.2
+    # Lines of history sent as the initial WebSocket frame
+    INITIAL_LINES: int = 1000
 
     def __init__(self):
         self._active_connections: dict[str, Set[WebSocket]] = {}
@@ -38,9 +66,7 @@ class LogStreamer:
             return []
 
         try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                all_lines = f.readlines()
-                return [line.rstrip("\n") for line in all_lines[-lines:]]
+            return await asyncio.to_thread(_tail, log_path, lines)
         except Exception as exc:
             logger.error("Failed to read log history for %s: %s", service_name, exc)
             return []
@@ -77,13 +103,12 @@ class LogStreamer:
         timed_out = False
 
         try:
-            # Send existing log content first
+            # Send existing log content first (last N lines, single frame)
             if log_path.exists():
                 try:
-                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                        content = f.read()
-                        if content:
-                            await self._safe_send(websocket, content)
+                    history = await asyncio.to_thread(_tail, log_path, self.INITIAL_LINES)
+                    if history:
+                        await self._safe_send(websocket, "\n".join(history))
                 except FileNotFoundError:
                     pass
 
@@ -105,14 +130,28 @@ class LogStreamer:
                         )
                         break
 
-                    line = f.readline()
+                    try:
+                        line = f.readline()
+                    except FileNotFoundError:
+                        line = ""
                     if line:
                         await self._safe_send(websocket, line.rstrip("\n"))
                     else:
+                        # Detect log truncation/rotation (e.g. log-enhancer rewrite):
+                        # if the file on disk is now shorter than our read offset,
+                        # reopen from the start to pick up the new content.
+                        try:
+                            if log_path.stat().st_size < f.tell():
+                                f.close()
+                                f = open(log_path, "r", encoding="utf-8", errors="replace")
+                                continue
+                        except FileNotFoundError:
+                            pass
                         # 使用短超时的等待，可以快速响应关闭
                         if self._shutdown:
                             break
                         await asyncio.sleep(self.POLL_INTERVAL)
+
 
         except WebSocketDisconnect:
             # Client disconnected normally; nothing to log loudly

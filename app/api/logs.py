@@ -1,5 +1,5 @@
 """Log streaming API routes."""
-from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/services", tags=["logs"])
 
 
 @router.get("/{name}/logs")
-async def get_service_logs(name: str, lines: int = 200, session: AsyncSession = Depends(get_session)):
+async def get_service_logs(name: str, lines: int = Query(200, ge=1, le=5000), session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Service).where(Service.name == name))
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")

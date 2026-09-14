@@ -1,10 +1,12 @@
 """Module management API routes."""
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.models.module import Module
+from app.models.service_module import ServiceModule
 from app.models.service import Service
 from app.schemas.module import (
     ModuleCreate, ModuleUpdate, ModuleResponse, ModuleCodeUpdate,
@@ -23,11 +25,15 @@ module_manager = ModuleManager()
 @router.get("", response_model=list[ModuleResponse])
 async def list_modules(session: AsyncSession = Depends(get_session)):
     modules = await module_manager.list_all(session)
+    # Single grouped count query instead of one query per module (N+1).
+    counts = dict((await session.execute(
+        select(ServiceModule.module_id, func.count(ServiceModule.id))
+        .where(ServiceModule.enabled == True)  # noqa: E712
+        .group_by(ServiceModule.module_id))).all())
     result = []
     for mod in modules:
-        service_count = await module_manager.get_service_count(session, mod.id)
         resp = ModuleResponse.model_validate(mod)
-        resp.service_count = service_count
+        resp.service_count = counts.get(mod.id, 0)
         result.append(resp)
     return result
 
@@ -45,6 +51,7 @@ async def create_module(data: ModuleCreate, session: AsyncSession = Depends(get_
             code_source=data.code_source,
             code=data.code,
             config_toml=data.config_toml,
+            requirements=data.requirements,
         )
         resp = ModuleResponse.model_validate(module)
         resp.service_count = 0
@@ -164,7 +171,7 @@ async def update_module_code(name: str, data: ModuleCodeUpdate, session: AsyncSe
 
 @router.post("/{name}/upload")
 async def upload_module_file(name: str, file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
-    if not file.filename.endswith(".py"):
+    if not file.filename or not file.filename.endswith(".py"):
         raise HTTPException(status_code=400, detail="Only .py files are allowed")
 
     content = (await file.read()).decode("utf-8")
@@ -251,7 +258,7 @@ async def update_module_requirements(name: str, data: RequirementsUpdate, sessio
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
     module.requirements_list = data.requirements
-    module.updated_at = __import__("datetime").datetime.now()
+    module.updated_at = datetime.now()
     try:
         await session.commit()
         await session.refresh(module)
